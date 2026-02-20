@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createHash } from 'crypto';
 
-function getAuthToken(password: string): string {
-  return createHash('sha256').update(`atelier-${password}`).digest('hex').substring(0, 32);
+// Must match the same hash function used in middleware.ts
+function simpleHash(str: string): string {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  return 'at7_' + Math.abs(hash).toString(36);
 }
 
 export async function POST(request: NextRequest) {
@@ -24,7 +30,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Generate auth token and set cookie
-    const token = getAuthToken(appPassword);
+    const token = simpleHash(`atelier-${appPassword}`);
     const response = NextResponse.json({ ok: true });
 
     response.cookies.set('atelier-auth', token, {

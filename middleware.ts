@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createHash } from 'crypto';
 
 // Routes that don't require authentication
 const PUBLIC_PATHS = ['/login', '/api/auth/login'];
 const STATIC_PREFIXES = ['/_next/', '/favicon.ico'];
 
-function getAuthToken(password: string): string {
-  return createHash('sha256').update(`atelier-${password}`).digest('hex').substring(0, 32);
+// Simple hash function compatible with Edge Runtime (no Node.js crypto)
+function simpleHash(str: string): string {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  return 'at7_' + Math.abs(hash).toString(36);
 }
 
 export function middleware(request: NextRequest) {
@@ -29,7 +35,7 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  const expectedToken = getAuthToken(password);
+  const expectedToken = simpleHash(`atelier-${password}`);
 
   if (cookie?.value === expectedToken) {
     return NextResponse.next();
