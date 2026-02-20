@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import Sidebar from "@/components/Sidebar";
+import LayoutWrapper from "@/components/LayoutWrapper";
 
 export const metadata: Metadata = {
   title: "Atelier Siete - Muebles & Decoracion",
@@ -15,12 +15,9 @@ export default function RootLayout({
   return (
     <html lang="es">
       <body className="antialiased bg-gray-50">
-        <div className="flex h-screen overflow-hidden">
-          <Sidebar />
-          <main className="flex-1 overflow-y-auto">
-            {children}
-          </main>
-        </div>
+        <LayoutWrapper>
+          {children}
+        </LayoutWrapper>
       </body>
     </html>
   );

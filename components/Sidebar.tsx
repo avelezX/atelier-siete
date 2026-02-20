@@ -10,6 +10,14 @@ import {
   Users,
   Settings,
   ChevronRight,
+  RefreshCw,
+  Truck,
+  TrendingUp,
+  Receipt,
+  BarChart3,
+  AlertTriangle,
+  Calculator,
+  Landmark,
 } from "lucide-react";
 
 interface MenuItem {
@@ -28,6 +36,12 @@ const menuSections: MenuSection[] = [
     title: "Principal",
     items: [
       { name: "Dashboard", href: "/", icon: LayoutDashboard },
+      { name: "Resumen", href: "/resumen", icon: BarChart3 },
+      { name: "Ventas", href: "/ventas", icon: TrendingUp },
+      { name: "IVA", href: "/iva", icon: Receipt },
+      { name: "Renta y Retencion", href: "/retencion", icon: Landmark },
+      { name: "Costo Cero", href: "/costo-cero", icon: AlertTriangle },
+      { name: "Costos Estimados", href: "/costos-estimados", icon: Calculator },
     ]
   },
   {
@@ -37,6 +51,13 @@ const menuSections: MenuSection[] = [
       { name: "Notas Credito", href: "/credit-notes", icon: FileMinus2 },
       { name: "Productos", href: "/products", icon: Package },
       { name: "Clientes", href: "/customers", icon: Users },
+    ]
+  },
+  {
+    title: "Datos",
+    items: [
+      { name: "Sincronizacion", href: "/sync", icon: RefreshCw },
+      { name: "Proveedores", href: "/suppliers", icon: Truck },
     ]
   },
   {

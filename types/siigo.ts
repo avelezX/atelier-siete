@@ -150,21 +150,42 @@ export interface SiigoCustomer {
 
 // --- Products ---
 
+export interface SiigoAccountGroup {
+  id: number;
+  name: string;
+}
+
+export interface SiigoProductWarehouse {
+  id: number;
+  name: string;
+  quantity: number;
+}
+
+export interface SiigoProductPrice {
+  currency_code: string;
+  price_list: Array<{ position: number; name?: string; value: number }>;
+}
+
 export interface SiigoProduct {
   id: string;
   code: string;
   name: string;
-  account_group?: number;
+  account_group?: SiigoAccountGroup;
   type?: string;
   stock_control?: boolean;
   active: boolean;
   tax_classification?: 'Taxed' | 'Exempt' | 'Excluded';
   tax_included?: boolean;
-  price?: Array<{
-    currency_code: string;
-    price_list: Array<{ position: number; value: number }>;
-  }>;
-  unit?: { id: number; name: string };
+  taxes?: Array<{ id: number; name: string; type?: string; percentage: number }>;
+  prices?: SiigoProductPrice[];
+  unit?: { code: string; name: string };
+  unit_label?: string;
+  reference?: string;
+  description?: string;
+  available_quantity?: number;
+  warehouses?: SiigoProductWarehouse[];
+  additional_fields?: Record<string, string>;
+  metadata?: { created?: string; last_updated?: string };
 }
 
 // --- Tax Catalog ---
@@ -183,6 +204,59 @@ export interface SiigoPaymentType {
   name: string;
   type?: string;
   due_date?: number;
+}
+
+// --- Journals (Comprobantes Contables) ---
+
+export interface SiigoJournalItemAccount {
+  code: string;
+  movement: 'Debit' | 'Credit';
+}
+
+export interface SiigoJournalItemCustomer {
+  id: string;
+  identification: string;
+  branch_office?: number;
+}
+
+export interface SiigoJournalItemProduct {
+  id: string;
+  code: string;
+  name: string;
+  quantity: number;
+}
+
+export interface SiigoJournalItem {
+  account: SiigoJournalItemAccount;
+  customer?: SiigoJournalItemCustomer;
+  product?: SiigoJournalItemProduct;
+  description: string;
+  value: number;
+}
+
+export interface SiigoJournal {
+  id: string;
+  document: { id: number };
+  number: number;
+  name: string;
+  date: string;
+  items: SiigoJournalItem[];
+  observations?: string;
+  metadata?: { created?: string };
+}
+
+// --- Vouchers (Recibos de Caja) ---
+
+export interface SiigoVoucher {
+  id: string;
+  document: { id: number };
+  number: number;
+  name: string;
+  date: string;
+  type: string;
+  items: SiigoJournalItem[];
+  observations?: string;
+  metadata?: { created?: string };
 }
 
 // --- Create Invoice Request / Response ---
@@ -221,5 +295,98 @@ export interface SiigoCreateInvoiceResponse {
   balance?: number;
   stamp?: { send: boolean; status?: string; cufe?: string };
   mail?: { send: boolean };
+  errors?: Array<{ Code: string; Message: string }>;
+}
+
+// --- Purchases (Facturas de Compra) ---
+
+export interface SiigoPurchaseItemTax {
+  id: number;
+  name: string;
+  type: string; // 'IVA' | 'Retefuente' | etc.
+  percentage: number;
+  value: number;
+}
+
+export interface SiigoPurchaseItem {
+  id: string;
+  type: string; // 'Account' | 'Product'
+  code: string; // PUC account code (e.g., '51201001', '61350502')
+  quantity: number;
+  price: number;
+  discount: number;
+  description: string;
+  total: number;
+  taxes?: SiigoPurchaseItemTax[];
+}
+
+export interface SiigoPurchase {
+  id: string;
+  document: { id: number };
+  number: number;
+  name: string;
+  date: string;
+  supplier: {
+    id: string;
+    identification: string;
+    branch_office: number;
+  };
+  total: number;
+  balance: number;
+  provider_invoice?: {
+    prefix: string;
+    number: string;
+  };
+  items: SiigoPurchaseItem[];
+  payments?: SiigoPayment[];
+  retentions?: SiigoRetention[];
+  metadata?: { created?: string };
+}
+
+// --- Document Types Catalog ---
+
+export interface SiigoDocumentType {
+  id: number;
+  name: string;
+  type: string;
+  description?: string;
+  consecutive?: number;
+}
+
+// --- Create Journal Request / Response ---
+
+export interface SiigoCreateJournalItem {
+  account: {
+    code: string;
+    movement: 'Debit' | 'Credit';
+  };
+  customer?: {
+    identification: string;
+    branch_office?: number;
+  };
+  product?: {
+    code: string;
+    quantity?: number;
+  };
+  cost_center?: number;
+  description: string;
+  value: number;
+}
+
+export interface SiigoCreateJournalRequest {
+  document: { id: number };
+  date: string;
+  items: SiigoCreateJournalItem[];
+  observations?: string;
+}
+
+export interface SiigoCreateJournalResponse {
+  id?: string;
+  document?: { id: number };
+  number?: number;
+  name?: string;
+  date?: string;
+  items?: SiigoJournalItem[];
+  observations?: string;
   errors?: Array<{ Code: string; Message: string }>;
 }

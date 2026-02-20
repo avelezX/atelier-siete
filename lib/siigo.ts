@@ -11,10 +11,16 @@ import type {
   SiigoCustomer,
   SiigoCreditNote,
   SiigoProduct,
+  SiigoJournal,
+  SiigoVoucher,
   SiigoTaxCatalog,
   SiigoPaymentType,
   SiigoCreateInvoiceRequest,
   SiigoCreateInvoiceResponse,
+  SiigoDocumentType,
+  SiigoCreateJournalRequest,
+  SiigoCreateJournalResponse,
+  SiigoPurchase,
 } from '@/types/siigo';
 
 const SIIGO_API_URL = process.env.SIIGO_API_URL || 'https://api.siigo.com';
@@ -260,6 +266,46 @@ export async function fetchPaymentTypes(): Promise<SiigoPaymentType[]> {
 /** Create a new invoice in Siigo */
 export async function createInvoice(data: SiigoCreateInvoiceRequest): Promise<SiigoCreateInvoiceResponse> {
   return siigoPost<SiigoCreateInvoiceResponse>('/v1/invoices', data);
+}
+
+/** Fetch document types catalog (filtered by type: CC, FV, etc.) */
+export async function fetchDocumentTypes(type?: string): Promise<SiigoDocumentType[]> {
+  const params: Record<string, string> = {};
+  if (type) params.type = type;
+  return siigoGet<SiigoDocumentType[]>('/v1/document-types', params);
+}
+
+/** Create a journal entry (comprobante contable) in Siigo */
+export async function createJournal(data: SiigoCreateJournalRequest): Promise<SiigoCreateJournalResponse> {
+  return siigoPost<SiigoCreateJournalResponse>('/v1/journals', data);
+}
+
+/** Fetch a single journal entry by its Siigo ID */
+export async function fetchJournal(id: string): Promise<SiigoCreateJournalResponse> {
+  return siigoGet<SiigoCreateJournalResponse>(`/v1/journals/${id}`);
+}
+
+/** Fetch ALL journals (comprobantes contables) */
+export async function fetchAllJournals(): Promise<SiigoJournal[]> {
+  return fetchAllPages<SiigoJournal>('/v1/journals');
+}
+
+/** Fetch ALL vouchers (recibos de caja) */
+export async function fetchAllVouchers(): Promise<SiigoVoucher[]> {
+  return fetchAllPages<SiigoVoucher>('/v1/vouchers');
+}
+
+/** Fetch a single page of purchases (facturas de compra) */
+export async function fetchPurchases(page = 1, pageSize = 25): Promise<SiigoPaginatedResponse<SiigoPurchase>> {
+  return siigoGet<SiigoPaginatedResponse<SiigoPurchase>>('/v1/purchases', {
+    page: String(page),
+    page_size: String(pageSize),
+  });
+}
+
+/** Fetch ALL purchases (facturas de compra) */
+export async function fetchAllPurchases(): Promise<SiigoPurchase[]> {
+  return fetchAllPages<SiigoPurchase>('/v1/purchases');
 }
 
 /** Invalidate cached token */

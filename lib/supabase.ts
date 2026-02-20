@@ -16,3 +16,8 @@ export const supabaseAdmin = serviceRoleKey
 export const atelierTable = (tableName: string) => {
   return (supabase as any).from(`atelier_${tableName}`)
 }
+
+// Helper admin (service_role) para sync y operaciones server-side
+export const atelierTableAdmin = (tableName: string) => {
+  return (supabaseAdmin as any).from(`atelier_${tableName}`)
+}
