@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createJournal, fetchJournal } from '@/lib/siigo';
-import type { SiigoCreateJournalItem, SiigoCreateJournalRequest } from '@/types/siigo';
+import { atelierTableAdmin } from '@/lib/supabase';
+import type { SiigoCreateJournalItem, SiigoCreateJournalRequest, SiigoCreateJournalResponse } from '@/types/siigo';
 
 // GET /api/siigo/journals?id=<siigo-id>
 export async function GET(request: NextRequest) {
@@ -16,6 +17,52 @@ export async function GET(request: NextRequest) {
 }
 
 export const maxDuration = 120;
+
+// Save journal + items to Supabase so dashboards reflect changes immediately (no full sync needed)
+async function saveJournalToSupabase(
+  response: SiigoCreateJournalResponse,
+  request: SiigoCreateJournalRequest
+) {
+  if (!response.id) return;
+
+  // Upsert journal header
+  const { data: journalRow, error: journalError } = await atelierTableAdmin('journals')
+    .upsert(
+      {
+        siigo_id: response.id,
+        document_id: response.document?.id || request.document.id,
+        number: response.number || null,
+        name: response.name || null,
+        date: response.date || request.date,
+        observations: response.observations || request.observations || null,
+        siigo_metadata: {},
+      },
+      { onConflict: 'siigo_id' }
+    )
+    .select('id')
+    .single();
+
+  if (journalError || !journalRow) return;
+
+  // Insert journal items from the response (has full product info) or fallback to request items
+  const items = response.items || [];
+  if (items.length > 0) {
+    const itemRows = items.map((item) => ({
+      journal_id: journalRow.id,
+      account_code: item.account?.code || 'unknown',
+      movement: item.account?.movement || 'Debit',
+      customer_siigo_id: item.customer?.id || null,
+      customer_identification: item.customer?.identification || null,
+      product_siigo_id: item.product?.id || null,
+      product_code: item.product?.code || null,
+      product_name: item.product?.name || null,
+      product_quantity: item.product?.quantity || null,
+      description: item.description || null,
+      value: item.value || 0,
+    }));
+    await atelierTableAdmin('journal_items').insert(itemRows);
+  }
+}
 
 interface CreateJournalsBody {
   document_type_id: number;
@@ -104,6 +151,13 @@ export async function POST(request: NextRequest) {
           journal_name: response.name,
           journal_id: response.id,
         });
+
+        // Save to Supabase so dashboards reflect changes immediately
+        try {
+          await saveJournalToSupabase(response, journalRequest);
+        } catch {
+          // Non-critical: journal exists in Siigo, Supabase will catch up on next sync
+        }
       } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : String(err);
         results.push({
