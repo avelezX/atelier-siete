@@ -117,7 +117,7 @@ export async function GET() {
     // 3. Fetch journal items for COGS (account 6135*)
     const costoVentas = await fetchAllRows(
       'journal_items',
-      'account_code, movement, value, journal_id',
+      'account_code, movement, value, journal_id, product_code, description',
       (q) => q.like('account_code', '6135%').eq('movement', 'Debit')
     );
 
@@ -515,11 +515,112 @@ export async function GET() {
     }
     ventas_by_supplier.sort((a, b) => b.total - a.total);
 
+    // --- Build row_details for inline expandable rows ---
+    interface RowBreakdown {
+      label: string;
+      by_month: Record<string, number>;
+      total: number;
+    }
+
+    function buildTopBreakdowns(
+      items: Array<{ key: string; month: string; value: number }>,
+      labelMap: Record<string, string> | ((key: string) => string),
+      topN: number = 4,
+    ): RowBreakdown[] {
+      // Group by key → { by_month, total }
+      const grouped = new Map<string, { by_month: Map<string, number>; total: number }>();
+      for (const item of items) {
+        if (!grouped.has(item.key)) {
+          grouped.set(item.key, { by_month: new Map(), total: 0 });
+        }
+        const g = grouped.get(item.key)!;
+        g.by_month.set(item.month, (g.by_month.get(item.month) || 0) + item.value);
+        g.total += item.value;
+      }
+
+      // Sort by total desc, take top N + "Otros"
+      const sorted = Array.from(grouped.entries()).sort((a, b) => b[1].total - a[1].total);
+      const top = sorted.slice(0, topN);
+      const rest = sorted.slice(topN);
+
+      const results: RowBreakdown[] = top.map(([key, data]) => ({
+        label: typeof labelMap === 'function' ? labelMap(key) : (labelMap[key] || key),
+        by_month: Object.fromEntries(data.by_month),
+        total: data.total,
+      }));
+
+      if (rest.length > 0) {
+        const othersByMonth = new Map<string, number>();
+        let othersTotal = 0;
+        for (const [, data] of rest) {
+          othersTotal += data.total;
+          for (const [m, v] of data.by_month) {
+            othersByMonth.set(m, (othersByMonth.get(m) || 0) + v);
+          }
+        }
+        results.push({
+          label: `Otros (${rest.length})`,
+          by_month: Object.fromEntries(othersByMonth),
+          total: othersTotal,
+        });
+      }
+
+      return results;
+    }
+
+    // Ventas Brutas by supplier
+    const ventasItems: Array<{ key: string; month: string; value: number }> = [];
+    invoiceItems.forEach((item) => {
+      const invoiceId = item.invoice_id as string;
+      if (!validInvoiceIds.has(invoiceId)) return;
+      const productCode = item.product_code as string;
+      const supplierName = productSupplierMap.get(productCode) || 'SIN PROVEEDOR';
+      const month = invoiceDateMap.get(invoiceId)?.substring(0, 7);
+      if (!month) return;
+      ventasItems.push({
+        key: supplierName,
+        month,
+        value: (Number(item.unit_price) || 0) * (Number(item.quantity) || 0),
+      });
+    });
+
+    // Costo de Ventas by supplier (via product_code → productSupplierMap)
+    const cogsItems: Array<{ key: string; month: string; value: number }> = [];
+    costoVentas.forEach((item) => {
+      const journalDate = journalDateMap.get(item.journal_id as string);
+      const month = journalDate?.substring(0, 7);
+      if (!month) return;
+      const productCode = (item.product_code as string) || '';
+      const supplierName = productCode ? (productSupplierMap.get(productCode) || 'SIN PROVEEDOR') : 'SIN PRODUCTO';
+      cogsItems.push({ key: supplierName, month, value: Number(item.value) || 0 });
+    });
+
+    // Gastos by subcategory (reuse allExpenses)
+    function expenseBreakdown(prefix: string): RowBreakdown[] {
+      const items = allExpenses
+        .filter((e) => e.account_code.startsWith(prefix))
+        .map((e) => ({
+          key: e.account_code.substring(0, 4),
+          month: e.month,
+          value: e.value,
+        }));
+      return buildTopBreakdowns(items, (key) => getExpenseCategory(key));
+    }
+
+    const row_details = {
+      ventas_brutas: buildTopBreakdowns(ventasItems, (k) => k),
+      costo_ventas: buildTopBreakdowns(cogsItems, (k) => k),
+      gastos_admin: expenseBreakdown('51'),
+      gastos_venta: expenseBreakdown('52'),
+      gastos_financieros: expenseBreakdown('53'),
+    };
+
     return NextResponse.json({
       months,
       totals,
       gastos_groups,
       ventas_by_supplier,
+      row_details,
       data_counts: {
         invoices: invoices.length,
         credit_notes: creditNotes.length,

@@ -81,11 +81,26 @@ interface SupplierRevenue {
   items: RevenueItem[];
 }
 
+interface RowBreakdown {
+  label: string;
+  by_month: Record<string, number>;
+  total: number;
+}
+
+interface RowDetails {
+  ventas_brutas: RowBreakdown[];
+  costo_ventas: RowBreakdown[];
+  gastos_admin: RowBreakdown[];
+  gastos_venta: RowBreakdown[];
+  gastos_financieros: RowBreakdown[];
+}
+
 interface ResumenData {
   months: MonthData[];
   totals: MonthData;
   gastos_groups: ExpenseGroup[];
   ventas_by_supplier: SupplierRevenue[];
+  row_details: RowDetails;
   data_counts: {
     invoices: number;
     credit_notes: number;
@@ -307,7 +322,17 @@ export default function ResumenPage() {
   const [showVentas, setShowVentas] = useState(false);
   const [showIva, setShowIva] = useState(false);
   const [yearFilter, setYearFilter] = useState<YearFilter>(String(new Date().getFullYear()));
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const router = useRouter();
+
+  function toggleRow(key: string) {
+    setExpandedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -575,9 +600,12 @@ export default function ResumenPage() {
                 </thead>
                 <tbody>
                   {/* Ventas Brutas */}
-                  <tr className="border-b border-gray-100 hover:bg-gray-50">
+                  <tr className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer" onClick={() => toggleRow('ventas_brutas')}>
                     <td className="px-4 py-2 font-medium text-gray-900 sticky left-0 bg-white">
-                      Ventas Brutas
+                      <span className="inline-flex items-center gap-1">
+                        {expandedRows.has('ventas_brutas') ? <ChevronDown className="w-3 h-3 text-gray-400" /> : <ChevronRight className="w-3 h-3 text-gray-400" />}
+                        Ventas Brutas
+                      </span>
                     </td>
                     {filteredMonths.map((m) => (
                       <td key={m.month} className="px-3 py-2 text-right text-gray-900">
@@ -588,6 +616,21 @@ export default function ResumenPage() {
                       {formatCurrency(t.ventas_brutas)}
                     </td>
                   </tr>
+                  {expandedRows.has('ventas_brutas') && data.row_details.ventas_brutas.map((bd) => (
+                    <tr key={bd.label} className="border-b border-gray-50 bg-green-50/30">
+                      <td className="pl-9 pr-4 py-1.5 text-xs text-gray-500 sticky left-0 bg-green-50/30 truncate max-w-[180px]" title={bd.label}>
+                        {bd.label}
+                      </td>
+                      {filteredMonths.map((m) => (
+                        <td key={m.month} className="px-3 py-1.5 text-right text-xs text-gray-500">
+                          {formatCurrency(bd.by_month[m.month] || 0)}
+                        </td>
+                      ))}
+                      <td className="px-4 py-1.5 text-right text-xs font-medium text-gray-600 bg-gray-50/50">
+                        {formatCurrency(filteredMonths.reduce((s, m) => s + (bd.by_month[m.month] || 0), 0))}
+                      </td>
+                    </tr>
+                  ))}
 
                   {/* Notas Credito */}
                   <tr className="border-b border-gray-100 hover:bg-gray-50">
@@ -620,9 +663,12 @@ export default function ResumenPage() {
                   </tr>
 
                   {/* Costo de Ventas */}
-                  <tr className="border-b border-gray-100 hover:bg-gray-50">
+                  <tr className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer" onClick={() => toggleRow('costo_ventas')}>
                     <td className="px-4 py-2 text-gray-600 sticky left-0 bg-white">
-                      (-) Costo de Ventas
+                      <span className="inline-flex items-center gap-1">
+                        {expandedRows.has('costo_ventas') ? <ChevronDown className="w-3 h-3 text-gray-400" /> : <ChevronRight className="w-3 h-3 text-gray-400" />}
+                        (-) Costo de Ventas
+                      </span>
                     </td>
                     {filteredMonths.map((m) => (
                       <td key={m.month} className="px-3 py-2 text-right text-red-600">
@@ -633,6 +679,21 @@ export default function ResumenPage() {
                       {formatCurrency(t.costo_ventas)}
                     </td>
                   </tr>
+                  {expandedRows.has('costo_ventas') && data.row_details.costo_ventas.map((bd) => (
+                    <tr key={bd.label} className="border-b border-gray-50 bg-red-50/20">
+                      <td className="pl-9 pr-4 py-1.5 text-xs text-gray-500 sticky left-0 bg-red-50/20 truncate max-w-[180px]" title={bd.label}>
+                        {bd.label}
+                      </td>
+                      {filteredMonths.map((m) => (
+                        <td key={m.month} className="px-3 py-1.5 text-right text-xs text-red-400">
+                          {formatCurrency(bd.by_month[m.month] || 0)}
+                        </td>
+                      ))}
+                      <td className="px-4 py-1.5 text-right text-xs font-medium text-red-500 bg-gray-50/50">
+                        {formatCurrency(filteredMonths.reduce((s, m) => s + (bd.by_month[m.month] || 0), 0))}
+                      </td>
+                    </tr>
+                  ))}
 
                   {/* Utilidad Bruta */}
                   <tr className="border-b border-gray-200 bg-blue-50 font-semibold">
@@ -665,9 +726,12 @@ export default function ResumenPage() {
                   </tr>
 
                   {/* Gastos Administracion */}
-                  <tr className="border-b border-gray-100 hover:bg-gray-50">
+                  <tr className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer" onClick={() => toggleRow('gastos_admin')}>
                     <td className="px-4 py-2 text-gray-600 sticky left-0 bg-white">
-                      (-) Gastos Admin
+                      <span className="inline-flex items-center gap-1">
+                        {expandedRows.has('gastos_admin') ? <ChevronDown className="w-3 h-3 text-gray-400" /> : <ChevronRight className="w-3 h-3 text-gray-400" />}
+                        (-) Gastos Admin
+                      </span>
                     </td>
                     {filteredMonths.map((m) => (
                       <td key={m.month} className="px-3 py-2 text-right text-orange-600">
@@ -678,11 +742,29 @@ export default function ResumenPage() {
                       {formatCurrency(t.gastos_admin)}
                     </td>
                   </tr>
+                  {expandedRows.has('gastos_admin') && data.row_details.gastos_admin.map((bd) => (
+                    <tr key={bd.label} className="border-b border-gray-50 bg-orange-50/20">
+                      <td className="pl-9 pr-4 py-1.5 text-xs text-gray-500 sticky left-0 bg-orange-50/20 truncate max-w-[180px]" title={bd.label}>
+                        {bd.label}
+                      </td>
+                      {filteredMonths.map((m) => (
+                        <td key={m.month} className="px-3 py-1.5 text-right text-xs text-orange-400">
+                          {formatCurrency(bd.by_month[m.month] || 0)}
+                        </td>
+                      ))}
+                      <td className="px-4 py-1.5 text-right text-xs font-medium text-orange-500 bg-gray-50/50">
+                        {formatCurrency(filteredMonths.reduce((s, m) => s + (bd.by_month[m.month] || 0), 0))}
+                      </td>
+                    </tr>
+                  ))}
 
                   {/* Gastos Ventas */}
-                  <tr className="border-b border-gray-100 hover:bg-gray-50">
+                  <tr className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer" onClick={() => toggleRow('gastos_venta')}>
                     <td className="px-4 py-2 text-gray-600 sticky left-0 bg-white">
-                      (-) Gastos Venta
+                      <span className="inline-flex items-center gap-1">
+                        {expandedRows.has('gastos_venta') ? <ChevronDown className="w-3 h-3 text-gray-400" /> : <ChevronRight className="w-3 h-3 text-gray-400" />}
+                        (-) Gastos Venta
+                      </span>
                     </td>
                     {filteredMonths.map((m) => (
                       <td key={m.month} className="px-3 py-2 text-right text-orange-600">
@@ -693,11 +775,29 @@ export default function ResumenPage() {
                       {formatCurrency(t.gastos_venta)}
                     </td>
                   </tr>
+                  {expandedRows.has('gastos_venta') && data.row_details.gastos_venta.map((bd) => (
+                    <tr key={bd.label} className="border-b border-gray-50 bg-orange-50/20">
+                      <td className="pl-9 pr-4 py-1.5 text-xs text-gray-500 sticky left-0 bg-orange-50/20 truncate max-w-[180px]" title={bd.label}>
+                        {bd.label}
+                      </td>
+                      {filteredMonths.map((m) => (
+                        <td key={m.month} className="px-3 py-1.5 text-right text-xs text-orange-400">
+                          {formatCurrency(bd.by_month[m.month] || 0)}
+                        </td>
+                      ))}
+                      <td className="px-4 py-1.5 text-right text-xs font-medium text-orange-500 bg-gray-50/50">
+                        {formatCurrency(filteredMonths.reduce((s, m) => s + (bd.by_month[m.month] || 0), 0))}
+                      </td>
+                    </tr>
+                  ))}
 
                   {/* Gastos Financieros */}
-                  <tr className="border-b border-gray-100 hover:bg-gray-50">
+                  <tr className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer" onClick={() => toggleRow('gastos_financieros')}>
                     <td className="px-4 py-2 text-gray-600 sticky left-0 bg-white">
-                      (-) Gastos Financieros
+                      <span className="inline-flex items-center gap-1">
+                        {expandedRows.has('gastos_financieros') ? <ChevronDown className="w-3 h-3 text-gray-400" /> : <ChevronRight className="w-3 h-3 text-gray-400" />}
+                        (-) Gastos Financieros
+                      </span>
                     </td>
                     {filteredMonths.map((m) => (
                       <td key={m.month} className="px-3 py-2 text-right text-orange-600">
@@ -708,6 +808,21 @@ export default function ResumenPage() {
                       {formatCurrency(t.gastos_financieros)}
                     </td>
                   </tr>
+                  {expandedRows.has('gastos_financieros') && data.row_details.gastos_financieros.map((bd) => (
+                    <tr key={bd.label} className="border-b border-gray-50 bg-orange-50/20">
+                      <td className="pl-9 pr-4 py-1.5 text-xs text-gray-500 sticky left-0 bg-orange-50/20 truncate max-w-[180px]" title={bd.label}>
+                        {bd.label}
+                      </td>
+                      {filteredMonths.map((m) => (
+                        <td key={m.month} className="px-3 py-1.5 text-right text-xs text-orange-400">
+                          {formatCurrency(bd.by_month[m.month] || 0)}
+                        </td>
+                      ))}
+                      <td className="px-4 py-1.5 text-right text-xs font-medium text-orange-500 bg-gray-50/50">
+                        {formatCurrency(filteredMonths.reduce((s, m) => s + (bd.by_month[m.month] || 0), 0))}
+                      </td>
+                    </tr>
+                  ))}
 
                   {/* Utilidad Operativa */}
                   <tr className="border-b border-gray-200 bg-amber-50 font-bold">

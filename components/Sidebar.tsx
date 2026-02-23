@@ -18,6 +18,7 @@ import {
   AlertTriangle,
   Calculator,
   Landmark,
+  DollarSign,
 } from "lucide-react";
 
 interface MenuItem {
@@ -42,6 +43,7 @@ const menuSections: MenuSection[] = [
       { name: "Renta y Retencion", href: "/retencion", icon: Landmark },
       { name: "Costo Cero", href: "/costo-cero", icon: AlertTriangle },
       { name: "Costos Estimados", href: "/costos-estimados", icon: Calculator },
+      { name: "Costos Reales", href: "/cost-tracking", icon: DollarSign },
     ]
   },
   {

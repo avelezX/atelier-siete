@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
-import { X, Loader2, CheckCircle, XCircle, RotateCcw } from 'lucide-react';
+import { X, Loader2, CheckCircle, XCircle, RotateCcw, Calendar } from 'lucide-react';
 import { formatCurrency } from '@/lib/utils';
 
 interface SelectedProduct {
@@ -10,6 +10,7 @@ interface SelectedProduct {
   estimated_cost: number;
   quantity_sold: number;
   status: string;
+  sale_month?: string;
 }
 
 interface DocumentType {
@@ -20,6 +21,7 @@ interface DocumentType {
 
 interface BatchResult {
   batch: number;
+  month?: string;
   product_codes: string[];
   success: boolean;
   journal_name?: string;
@@ -32,6 +34,27 @@ interface Props {
   defaultDate: string;
   onClose: () => void;
   onSuccess: () => void;
+}
+
+const MONTH_NAMES: Record<string, string> = {
+  '01': 'Ene', '02': 'Feb', '03': 'Mar', '04': 'Abr',
+  '05': 'May', '06': 'Jun', '07': 'Jul', '08': 'Ago',
+  '09': 'Sep', '10': 'Oct', '11': 'Nov', '12': 'Dic',
+};
+
+function formatMonth(ym: string): string {
+  const [y, m] = ym.split('-');
+  return `${MONTH_NAMES[m] || m} ${y}`;
+}
+
+function lastDayOfMonth(ym: string): string {
+  const [y, m] = ym.split('-').map(Number);
+  const d = new Date(y, m, 0).getDate();
+  return `${ym}-${String(d).padStart(2, '0')}`;
+}
+
+function productKey(p: SelectedProduct): string {
+  return p.sale_month ? `${p.product_code}::${p.sale_month}` : p.product_code;
 }
 
 export default function JournalModal({ products, defaultDate, onClose, onSuccess }: Props) {
@@ -47,13 +70,28 @@ export default function JournalModal({ products, defaultDate, onClose, onSuccess
   const [results, setResults] = useState<BatchResult[] | null>(null);
   const [error, setError] = useState('');
 
-  // Editable costs: key = product_code, value = user-adjusted cost
   const [costOverrides, setCostOverrides] = useState<Record<string, number>>({});
 
-  // Initialize with estimated costs
+  // Detect per-month mode
+  const hasMonths = products.some(p => p.sale_month);
+
+  // Group by month when in per-month mode
+  const monthGroups = useMemo(() => {
+    if (!hasMonths) return null;
+    const groups = new Map<string, SelectedProduct[]>();
+    for (const p of products) {
+      const month = p.sale_month || 'unknown';
+      if (!groups.has(month)) groups.set(month, []);
+      groups.get(month)!.push(p);
+    }
+    // Sort by month
+    return new Map([...groups.entries()].sort(([a], [b]) => a.localeCompare(b)));
+  }, [products, hasMonths]);
+
+  // Initialize cost overrides
   useEffect(() => {
     const initial: Record<string, number> = {};
-    products.forEach(p => { initial[p.product_code] = Math.round(p.estimated_cost); });
+    products.forEach(p => { initial[productKey(p)] = Math.round(p.estimated_cost); });
     setCostOverrides(initial);
   }, [products]);
 
@@ -63,7 +101,6 @@ export default function JournalModal({ products, defaultDate, onClose, onSuccess
       .then(data => {
         const types: DocumentType[] = data.results || [];
         setDocTypes(types);
-        // Auto-select "Costeo" if available, otherwise first type
         const costeo = types.find(t => t.name.toLowerCase().includes('costeo'));
         if (costeo) setSelectedDocType(costeo.id);
         else if (types.length === 1) setSelectedDocType(types[0].id);
@@ -72,30 +109,42 @@ export default function JournalModal({ products, defaultDate, onClose, onSuccess
       .finally(() => setLoadingDocTypes(false));
   }, []);
 
-  function getCost(code: string, fallback: number): number {
-    return costOverrides[code] ?? Math.round(fallback);
+  function getCost(key: string, fallback: number): number {
+    return costOverrides[key] ?? Math.round(fallback);
   }
 
-  function updateCost(code: string, value: number) {
-    setCostOverrides(prev => ({ ...prev, [code]: value }));
+  function updateCost(key: string, value: number) {
+    setCostOverrides(prev => ({ ...prev, [key]: value }));
   }
 
   function resetAllCosts() {
     const reset: Record<string, number> = {};
-    products.forEach(p => { reset[p.product_code] = Math.round(p.estimated_cost); });
+    products.forEach(p => { reset[productKey(p)] = Math.round(p.estimated_cost); });
     setCostOverrides(reset);
   }
 
   const totalCost = useMemo(
-    () => products.reduce((s, p) => s + getCost(p.product_code, p.estimated_cost), 0),
+    () => products.reduce((s, p) => s + getCost(productKey(p), p.estimated_cost), 0),
     [products, costOverrides] // eslint-disable-line react-hooks/exhaustive-deps
   );
 
-  const hasOverrides = products.some(p => getCost(p.product_code, p.estimated_cost) !== Math.round(p.estimated_cost));
+  const hasOverrides = products.some(p =>
+    getCost(productKey(p), p.estimated_cost) !== Math.round(p.estimated_cost)
+  );
+
+  // Per-month cost totals (for display)
+  const monthTotals = useMemo(() => {
+    if (!monthGroups) return null;
+    const totals = new Map<string, number>();
+    for (const [month, prods] of monthGroups) {
+      totals.set(month, prods.reduce((s, p) => s + getCost(productKey(p), p.estimated_cost), 0));
+    }
+    return totals;
+  }, [monthGroups, costOverrides]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleCreate() {
     if (!selectedDocType) { setError('Seleccione un tipo de documento'); return; }
-    if (!date) { setError('Seleccione una fecha'); return; }
+    if (!hasMonths && !date) { setError('Seleccione una fecha'); return; }
     if (!cogsAccount || !inventoryAccount) { setError('Ingrese las cuentas contables'); return; }
     if (!customerIdentification) { setError('Ingrese el NIT de la empresa'); return; }
 
@@ -104,29 +153,74 @@ export default function JournalModal({ products, defaultDate, onClose, onSuccess
     setResults(null);
 
     try {
-      const res = await fetch('/api/siigo/journals', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          document_type_id: selectedDocType,
-          date,
-          cogs_account: cogsAccount,
-          inventory_account: inventoryAccount,
-          customer_identification: customerIdentification,
-          products: products.map(p => ({
-            product_code: p.product_code,
-            product_name: p.product_name,
-            estimated_cost: getCost(p.product_code, p.estimated_cost),
-            quantity_sold: p.quantity_sold,
-          })),
-          observations,
-        }),
-      });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-      setResults(data.results);
-      if (data.fail_count === 0) {
-        setTimeout(() => onSuccess(), 3000);
+      if (monthGroups) {
+        // Per-month: one API call per month
+        const allResults: BatchResult[] = [];
+        let batchOffset = 0;
+
+        for (const [month, monthProducts] of monthGroups) {
+          const monthDate = lastDayOfMonth(month);
+
+          const res = await fetch('/api/siigo/journals', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              document_type_id: selectedDocType,
+              date: monthDate,
+              cogs_account: cogsAccount,
+              inventory_account: inventoryAccount,
+              customer_identification: customerIdentification,
+              products: monthProducts.map(p => ({
+                product_code: p.product_code,
+                product_name: p.product_name,
+                estimated_cost: getCost(productKey(p), p.estimated_cost),
+                quantity_sold: p.quantity_sold,
+              })),
+              observations: observations || `Costeo ${formatMonth(month)}`,
+            }),
+          });
+          const respData = await res.json();
+          if (respData.error) throw new Error(`${formatMonth(month)}: ${respData.error}`);
+
+          const monthResults = (respData.results as BatchResult[]).map(r => ({
+            ...r,
+            batch: r.batch + batchOffset,
+            month,
+          }));
+          allResults.push(...monthResults);
+          batchOffset += (respData.results as BatchResult[]).length;
+        }
+
+        setResults(allResults);
+        if (allResults.every(r => r.success)) {
+          setTimeout(() => onSuccess(), 3000);
+        }
+      } else {
+        // Single-date flow (backward compatible)
+        const res = await fetch('/api/siigo/journals', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            document_type_id: selectedDocType,
+            date,
+            cogs_account: cogsAccount,
+            inventory_account: inventoryAccount,
+            customer_identification: customerIdentification,
+            products: products.map(p => ({
+              product_code: p.product_code,
+              product_name: p.product_name,
+              estimated_cost: getCost(productKey(p), p.estimated_cost),
+              quantity_sold: p.quantity_sold,
+            })),
+            observations,
+          }),
+        });
+        const respData = await res.json();
+        if (respData.error) throw new Error(respData.error);
+        setResults(respData.results);
+        if (respData.fail_count === 0) {
+          setTimeout(() => onSuccess(), 3000);
+        }
       }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Error desconocido');
@@ -134,6 +228,8 @@ export default function JournalModal({ products, defaultDate, onClose, onSuccess
       setCreating(false);
     }
   }
+
+  const numJournals = monthGroups ? monthGroups.size : 1;
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -143,7 +239,8 @@ export default function JournalModal({ products, defaultDate, onClose, onSuccess
           <div>
             <h2 className="text-lg font-bold text-gray-900">Crear Comprobante Contable</h2>
             <p className="text-sm text-gray-500">
-              {products.length} producto(s) seleccionado(s)
+              {products.length} producto(s)
+              {hasMonths && ` — ${numJournals} comprobante(s), uno por mes de venta`}
             </p>
           </div>
           <button type="button" onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg">
@@ -178,15 +275,26 @@ export default function JournalModal({ products, defaultDate, onClose, onSuccess
                   )}
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Fecha</label>
-                  <input
-                    type="date"
-                    value={date}
-                    onChange={e => setDate(e.target.value)}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
-                  />
-                </div>
+                {hasMonths ? (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Fecha</label>
+                    <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-600">
+                      <Calendar className="w-4 h-4 text-gray-400" />
+                      Ultimo dia del mes de venta
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Fecha</label>
+                    <input
+                      type="date"
+                      title="Fecha del comprobante"
+                      value={date}
+                      onChange={e => setDate(e.target.value)}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                    />
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -238,62 +346,132 @@ export default function JournalModal({ products, defaultDate, onClose, onSuccess
                     <button type="button" onClick={resetAllCosts}
                       className="flex items-center gap-1 text-xs text-amber-700 hover:underline">
                       <RotateCcw className="w-3 h-3" />
-                      Restaurar sugeridos (70%)
+                      Restaurar sugeridos
                     </button>
                   )}
                 </div>
-                <div className="border border-gray-200 rounded-lg overflow-hidden max-h-72 overflow-y-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-gray-50 sticky top-0">
-                      <tr>
-                        <th className="text-left px-3 py-2 text-gray-500 font-medium">Codigo</th>
-                        <th className="text-left px-3 py-2 text-gray-500 font-medium">Producto</th>
-                        <th className="text-right px-3 py-2 text-gray-500 font-medium">Cant.</th>
-                        <th className="text-right px-3 py-2 text-gray-400 font-medium text-xs">Sugerido</th>
-                        <th className="text-right px-3 py-2 text-amber-600 font-medium">Costo</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {products.map(p => {
-                        const suggested = Math.round(p.estimated_cost);
-                        const current = getCost(p.product_code, p.estimated_cost);
-                        const isModified = current !== suggested;
-                        return (
-                          <tr key={p.product_code} className={`hover:bg-gray-50 ${isModified ? 'bg-amber-50/30' : ''}`}>
-                            <td className="px-3 py-1.5 font-mono text-xs text-gray-600">
-                              {p.product_code}
-                            </td>
-                            <td className="px-3 py-1.5 text-gray-900 truncate max-w-[180px]" title={p.product_name}>
-                              {p.product_name}
-                            </td>
-                            <td className="px-3 py-1.5 text-right text-gray-600">
-                              {p.quantity_sold}
-                            </td>
-                            <td className="px-3 py-1.5 text-right text-gray-400 text-xs">
-                              {formatCurrency(suggested)}
-                            </td>
-                            <td className="px-1 py-1 text-right">
-                              <input
-                                type="number"
-                                title={`Costo para ${p.product_code}`}
-                                value={current}
-                                onChange={e => updateCost(p.product_code, Math.round(Number(e.target.value) || 0))}
-                                className={`w-28 text-right px-2 py-1 text-sm border rounded-md font-mono
-                                  ${isModified
-                                    ? 'border-amber-400 bg-amber-50 text-amber-900 font-medium'
-                                    : 'border-gray-200 text-gray-900'
-                                  } focus:ring-1 focus:ring-amber-500 focus:border-amber-500`}
-                                min={0}
-                              />
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+
+                {hasMonths && monthGroups && monthTotals ? (
+                  /* Per-month grouped table */
+                  <div className="border border-gray-200 rounded-lg overflow-hidden max-h-80 overflow-y-auto">
+                    {[...monthGroups.entries()].map(([month, prods]) => (
+                      <div key={month}>
+                        <div className="bg-gray-100 px-3 py-1.5 flex items-center justify-between sticky top-0 border-b border-gray-200">
+                          <div className="flex items-center gap-2">
+                            <Calendar className="w-3.5 h-3.5 text-gray-500" />
+                            <span className="text-xs font-semibold text-gray-700">
+                              {formatMonth(month)}
+                            </span>
+                            <span className="text-xs text-gray-500">
+                              — {prods.length} prod. — Fecha: {lastDayOfMonth(month)}
+                            </span>
+                          </div>
+                          <span className="text-xs font-semibold text-gray-700">
+                            {formatCurrency(monthTotals.get(month) || 0)}
+                          </span>
+                        </div>
+                        <table className="w-full text-sm">
+                          <tbody className="divide-y divide-gray-100">
+                            {prods.map(p => {
+                              const key = productKey(p);
+                              const suggested = Math.round(p.estimated_cost);
+                              const current = getCost(key, p.estimated_cost);
+                              const isModified = current !== suggested;
+                              return (
+                                <tr key={key} className={`hover:bg-gray-50 ${isModified ? 'bg-amber-50/30' : ''}`}>
+                                  <td className="px-3 py-1.5 font-mono text-xs text-gray-600 w-24">
+                                    {p.product_code}
+                                  </td>
+                                  <td className="px-3 py-1.5 text-gray-900 truncate max-w-[180px]" title={p.product_name}>
+                                    {p.product_name}
+                                  </td>
+                                  <td className="px-3 py-1.5 text-right text-gray-600 w-12">
+                                    {p.quantity_sold}
+                                  </td>
+                                  <td className="px-3 py-1.5 text-right text-gray-400 text-xs w-24">
+                                    {formatCurrency(suggested)}
+                                  </td>
+                                  <td className="px-1 py-1 text-right w-32">
+                                    <input
+                                      type="number"
+                                      title={`Costo para ${p.product_code} ${month}`}
+                                      value={current}
+                                      onChange={e => updateCost(key, Math.round(Number(e.target.value) || 0))}
+                                      className={`w-28 text-right px-2 py-1 text-sm border rounded-md font-mono
+                                        ${isModified
+                                          ? 'border-amber-400 bg-amber-50 text-amber-900 font-medium'
+                                          : 'border-gray-200 text-gray-900'
+                                        } focus:ring-1 focus:ring-amber-500 focus:border-amber-500`}
+                                      min={0}
+                                    />
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  /* Original flat table (backward compatible) */
+                  <div className="border border-gray-200 rounded-lg overflow-hidden max-h-72 overflow-y-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50 sticky top-0">
+                        <tr>
+                          <th className="text-left px-3 py-2 text-gray-500 font-medium">Codigo</th>
+                          <th className="text-left px-3 py-2 text-gray-500 font-medium">Producto</th>
+                          <th className="text-right px-3 py-2 text-gray-500 font-medium">Cant.</th>
+                          <th className="text-right px-3 py-2 text-gray-400 font-medium text-xs">Sugerido</th>
+                          <th className="text-right px-3 py-2 text-amber-600 font-medium">Costo</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {products.map(p => {
+                          const key = productKey(p);
+                          const suggested = Math.round(p.estimated_cost);
+                          const current = getCost(key, p.estimated_cost);
+                          const isModified = current !== suggested;
+                          return (
+                            <tr key={key} className={`hover:bg-gray-50 ${isModified ? 'bg-amber-50/30' : ''}`}>
+                              <td className="px-3 py-1.5 font-mono text-xs text-gray-600">
+                                {p.product_code}
+                              </td>
+                              <td className="px-3 py-1.5 text-gray-900 truncate max-w-[180px]" title={p.product_name}>
+                                {p.product_name}
+                              </td>
+                              <td className="px-3 py-1.5 text-right text-gray-600">
+                                {p.quantity_sold}
+                              </td>
+                              <td className="px-3 py-1.5 text-right text-gray-400 text-xs">
+                                {formatCurrency(suggested)}
+                              </td>
+                              <td className="px-1 py-1 text-right">
+                                <input
+                                  type="number"
+                                  title={`Costo para ${p.product_code}`}
+                                  value={current}
+                                  onChange={e => updateCost(key, Math.round(Number(e.target.value) || 0))}
+                                  className={`w-28 text-right px-2 py-1 text-sm border rounded-md font-mono
+                                    ${isModified
+                                      ? 'border-amber-400 bg-amber-50 text-amber-900 font-medium'
+                                      : 'border-gray-200 text-gray-900'
+                                    } focus:ring-1 focus:ring-amber-500 focus:border-amber-500`}
+                                  min={0}
+                                />
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
                 <p className="text-xs text-gray-400 mt-1">
-                  Sugerido = Subtotal x 0.70. Puedes editar el costo de cada producto antes de crear el comprobante.
+                  {hasMonths
+                    ? 'Cada mes genera un comprobante separado con fecha = ultimo dia del mes de venta.'
+                    : 'Sugerido = Subtotal x 0.70. Puedes editar el costo de cada producto antes de crear el comprobante.'}
                 </p>
               </div>
 
@@ -316,7 +494,11 @@ export default function JournalModal({ products, defaultDate, onClose, onSuccess
                 <p className="text-xs text-amber-600 text-center mt-2">
                   Debitos = Creditos (cuadrado)
                   {hasOverrides && ' | Costos modificados manualmente'}
-                  {products.length > 50 && ` | Se crearan ${Math.ceil(products.length / 50)} comprobante(s) en lotes de 50`}
+                  {hasMonths
+                    ? ` | ${numJournals} comprobante(s) por mes`
+                    : products.length > 50
+                      ? ` | Se crearan ${Math.ceil(products.length / 50)} comprobante(s) en lotes de 50`
+                      : ''}
                 </p>
               </div>
 
@@ -329,7 +511,7 @@ export default function JournalModal({ products, defaultDate, onClose, onSuccess
                   value={observations}
                   onChange={e => setObservations(e.target.value)}
                   rows={2}
-                  placeholder="Ajuste costo de venta estimado (70%)..."
+                  placeholder={hasMonths ? 'Se auto-generara "Costeo [Mes Ano]" si se deja vacio' : 'Ajuste costo de venta estimado (70%)...'}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
                   maxLength={4000}
                 />
@@ -358,7 +540,7 @@ export default function JournalModal({ products, defaultDate, onClose, onSuccess
               <div className="space-y-2">
                 {results.map(r => (
                   <div
-                    key={r.batch}
+                    key={`${r.batch}-${r.month || ''}`}
                     className={`flex items-center justify-between px-4 py-3 rounded-lg border ${
                       r.success
                         ? 'bg-green-50 border-green-200'
@@ -367,7 +549,9 @@ export default function JournalModal({ products, defaultDate, onClose, onSuccess
                   >
                     <div>
                       <p className={`text-sm font-medium ${r.success ? 'text-green-800' : 'text-red-800'}`}>
-                        Lote {r.batch} — {r.product_codes.length} producto(s)
+                        {r.month ? formatMonth(r.month) : `Lote ${r.batch}`}
+                        {' '}&mdash; {r.product_codes.length} producto(s)
+                        {r.month && ` — Fecha: ${lastDayOfMonth(r.month)}`}
                       </p>
                       {r.success && r.journal_name && (
                         <p className="text-xs text-green-600">Comprobante: {r.journal_name}</p>
@@ -409,7 +593,7 @@ export default function JournalModal({ products, defaultDate, onClose, onSuccess
               <button
                 type="button"
                 onClick={handleCreate}
-                disabled={creating || !selectedDocType || !date || !customerIdentification}
+                disabled={creating || !selectedDocType || (!hasMonths && !date) || !customerIdentification}
                 className="flex items-center gap-2 px-6 py-2 text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {creating ? (
@@ -417,6 +601,8 @@ export default function JournalModal({ products, defaultDate, onClose, onSuccess
                     <Loader2 className="w-4 h-4 animate-spin" />
                     Creando...
                   </>
+                ) : hasMonths ? (
+                  `Crear ${numJournals} Comprobante(s)`
                 ) : (
                   `Crear Comprobante (${products.length} productos)`
                 )}
