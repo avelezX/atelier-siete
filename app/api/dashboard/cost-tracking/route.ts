@@ -89,7 +89,7 @@ export async function GET(request: NextRequest) {
     let allInvoiceItems: Record<string, unknown>[] = [];
     for (let i = 0; i < invoiceIds.length; i += 200) {
       const batch = invoiceIds.slice(i, i + 200);
-      const items = await fetchAllRows('invoice_items', 'product_code, quantity, unit_price, line_total, invoice_id', (q) =>
+      const items = await fetchAllRows('invoice_items', 'product_code, quantity, unit_price, line_total, tax_value, invoice_id', (q) =>
         q.in('invoice_id', batch)
       );
       allInvoiceItems = allInvoiceItems.concat(items);
@@ -170,7 +170,9 @@ export async function GET(request: NextRequest) {
       const month = invoiceDateMap.get(item.invoice_id as string);
       if (!month) continue;
       const qty = (item.quantity as number) || 0;
-      const revenue = (item.line_total as number) || 0;
+      const lineTotal = (item.line_total as number) || 0;
+      const taxValue = (item.tax_value as number) || 0;
+      const revenue = lineTotal - taxValue;
 
       // Total per product (for cost resolution)
       if (!salesTotalByProduct.has(code)) salesTotalByProduct.set(code, { qty: 0, revenue: 0 });
@@ -252,7 +254,8 @@ export async function GET(request: NextRequest) {
       const product = productByCode.get(code);
       const purchase = purchaseByProduct.get(code)!;
       const supplierName = (product?.supplier_name as string) || '';
-      const salePrice = (product?.sale_price as number) || 0;
+      const salePriceWithIva = (product?.sale_price as number) || 0;
+      const salePrice = Math.round(salePriceWithIva / 1.19);
       const purchaseSupplier = supplierName ? (supplierMatchMap.get(supplierName) || null) : null;
 
       // Journal cost for THIS product in THIS month specifically
