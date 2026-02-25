@@ -19,6 +19,7 @@ import {
   Calculator,
   Landmark,
   DollarSign,
+  BookOpen,
 } from "lucide-react";
 
 interface MenuItem {
@@ -66,6 +67,7 @@ const menuSections: MenuSection[] = [
     title: "Configuracion",
     items: [
       { name: "Ajustes", href: "/settings", icon: Settings },
+      { name: "Documentacion", href: "/documentacion", icon: BookOpen },
     ]
   }
 ];

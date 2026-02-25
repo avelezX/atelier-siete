@@ -128,6 +128,31 @@ El codigo del cliente Siigo fue copiado y adaptado de Hermes.
 
 ---
 
+## Deploy (Vercel)
+
+- **Hosting**: Vercel (Team: Saman, scope: `saman-c3a557cf`)
+- **Repo conectado**: `avelezX/atelier-siete` (remote `avelezx`)
+- **Branch de produccion**: `master`
+- **Git config local**: autor `avelezX`, email `a.velez@saman-wm.com`
+- **Dos remotes**: `origin` (avelezsaffon) y `avelezx` (avelezX) — Vercel usa `avelezx`
+
+### Deploy manual (Deploy Hook)
+
+```bash
+curl -X POST "https://api.vercel.com/v1/integrations/deploy/prj_OyQlpebXEHh4Tapd2UUYEsMO2i6B/xoOyOMcVfO"
+```
+
+### Push a produccion
+
+```bash
+# Siempre pushear a avelezx para que Vercel detecte cambios
+git push avelezx master
+```
+
+> **Nota**: Vercel valida que el autor del commit sea miembro del team Saman. El git config local esta configurado con `a.velez@saman-wm.com` para cumplir esto. Si el auto-deploy no funciona, usar el deploy hook.
+
+---
+
 ## Comandos Utiles
 
 ```bash
@@ -140,6 +165,9 @@ npm start
 
 # Test conexion Siigo
 curl http://localhost:3000/api/siigo/auth
+
+# Deploy manual a Vercel
+curl -X POST "https://api.vercel.com/v1/integrations/deploy/prj_OyQlpebXEHh4Tapd2UUYEsMO2i6B/xoOyOMcVfO"
 ```
 
 ---
@@ -153,5 +181,5 @@ curl http://localhost:3000/api/siigo/auth
 
 ---
 
-**Ultima actualizacion**: Febrero 20, 2026
-**Version**: 0.1.0 (Setup inicial + Siigo)
+**Ultima actualizacion**: Febrero 24, 2026
+**Version**: 0.2.0 (Costos Reales + Deploy config)
