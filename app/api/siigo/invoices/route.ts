@@ -11,10 +11,9 @@ export async function GET(request: NextRequest) {
 
     const data = await fetchInvoices({ dateStart, dateEnd, page, pageSize });
     return NextResponse.json(data);
-  } catch (error: any) {
-    return NextResponse.json(
-      { error: error.message },
-      { status: 500 }
-    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('[Siigo /invoices]', message);
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

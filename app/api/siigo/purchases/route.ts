@@ -7,8 +7,9 @@ export async function GET(request: NextRequest) {
     const pageSize = request.nextUrl.searchParams.get('page_size') || '5';
     const data = await fetchPurchases(Number(page), Number(pageSize));
     return NextResponse.json(data);
-  } catch (error: unknown) {
+  } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    console.error('[Siigo /purchases]', message);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

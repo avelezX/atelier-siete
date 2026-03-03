@@ -32,14 +32,40 @@ const SIIGO_PARTNER_ID = process.env.SIIGO_PARTNER_ID || 'atelierSiete';
 let cachedToken: string | null = null;
 let tokenExpiresAt: number = 0;
 
+// Data cache for stable reference data (products, customers, catalogs)
+interface DataCacheEntry<T> {
+  data: T[];
+  expiresAt: number;
+}
+const _dataCache = new Map<string, DataCacheEntry<unknown>>();
+const CACHE_1H  = 60 * 60 * 1000;
+const CACHE_24H = 24 * 60 * 60 * 1000;
+
+async function getCachedOrFetch<T>(
+  key: string,
+  ttlMs: number,
+  fn: () => Promise<T[]>
+): Promise<T[]> {
+  const cached = _dataCache.get(key) as DataCacheEntry<T> | undefined;
+  if (cached && Date.now() < cached.expiresAt) {
+    console.log(`[Siigo] cache HIT: ${key}`);
+    return cached.data;
+  }
+  console.log(`[Siigo] cache MISS: ${key} — fetching from API...`);
+  const data = await fn();
+  _dataCache.set(key, { data, expiresAt: Date.now() + ttlMs });
+  return data;
+}
+
 /**
  * Authenticate with Siigo API. Caches token for ~23 hours (valid 24h).
  */
 async function getToken(): Promise<string> {
   const now = Date.now();
   if (cachedToken && now < tokenExpiresAt) {
-    return cachedToken;
+    return cachedToken; // cache HIT — no log needed (called on every request)
   }
+  console.log('[Siigo] Fetching new token...');
 
   if (!SIIGO_USERNAME || !SIIGO_ACCESS_KEY) {
     throw new Error('SIIGO_USERNAME y SIIGO_ACCESS_KEY deben estar configurados en .env.local');
@@ -64,6 +90,7 @@ async function getToken(): Promise<string> {
   const data: SiigoAuthResponse = await res.json();
   cachedToken = data.access_token;
   tokenExpiresAt = now + 23 * 60 * 60 * 1000;
+  console.log('[Siigo] Token cacheado — expira en 23h');
   return cachedToken;
 }
 
@@ -88,6 +115,7 @@ async function siigoGet<T>(path: string, params?: Record<string, string>): Promi
   });
 
   if (res.status === 401) {
+    console.log('[Siigo] 401 en GET — limpiando token y reintentando...');
     cachedToken = null;
     tokenExpiresAt = 0;
     const newToken = await getToken();
@@ -131,6 +159,7 @@ async function siigoPost<T>(path: string, body: unknown): Promise<T> {
   let res = await doRequest(token);
 
   if (res.status === 401) {
+    console.log('[Siigo] 401 en POST — limpiando token y reintentando...');
     cachedToken = null;
     tokenExpiresAt = 0;
     const newToken = await getToken();
@@ -232,9 +261,11 @@ export async function fetchAllInvoices(opts?: {
   return fetchAllPages<SiigoInvoice>('/v1/invoices', params);
 }
 
-/** Fetch ALL customers */
+/** Fetch ALL customers (cached 1h) */
 export async function fetchAllCustomers(): Promise<SiigoCustomer[]> {
-  return fetchAllPages<SiigoCustomer>('/v1/customers');
+  return getCachedOrFetch('customers', CACHE_1H, () =>
+    fetchAllPages<SiigoCustomer>('/v1/customers')
+  );
 }
 
 /** Fetch ALL credit notes */
@@ -248,19 +279,25 @@ export async function fetchAllCreditNotes(opts?: {
   return fetchAllPages<SiigoCreditNote>('/v1/credit-notes', params);
 }
 
-/** Fetch ALL products */
+/** Fetch ALL products (cached 1h) */
 export async function fetchAllProducts(): Promise<SiigoProduct[]> {
-  return fetchAllPages<SiigoProduct>('/v1/products');
+  return getCachedOrFetch('products', CACHE_1H, () =>
+    fetchAllPages<SiigoProduct>('/v1/products')
+  );
 }
 
-/** Fetch taxes catalog */
+/** Fetch taxes catalog (cached 24h) */
 export async function fetchTaxes(): Promise<SiigoTaxCatalog[]> {
-  return siigoGet<SiigoTaxCatalog[]>('/v1/taxes');
+  return getCachedOrFetch('taxes', CACHE_24H, () =>
+    siigoGet<SiigoTaxCatalog[]>('/v1/taxes').then(d => Array.isArray(d) ? d : [d])
+  );
 }
 
-/** Fetch payment types */
+/** Fetch payment types (cached 24h) */
 export async function fetchPaymentTypes(): Promise<SiigoPaymentType[]> {
-  return siigoGet<SiigoPaymentType[]>('/v1/payment-types', { document_type: 'FV' });
+  return getCachedOrFetch('payment-types', CACHE_24H, () =>
+    siigoGet<SiigoPaymentType[]>('/v1/payment-types', { document_type: 'FV' }).then(d => Array.isArray(d) ? d : [d])
+  );
 }
 
 /** Create a new invoice in Siigo */
@@ -268,11 +305,14 @@ export async function createInvoice(data: SiigoCreateInvoiceRequest): Promise<Si
   return siigoPost<SiigoCreateInvoiceResponse>('/v1/invoices', data);
 }
 
-/** Fetch document types catalog (filtered by type: CC, FV, etc.) */
+/** Fetch document types catalog (cached 24h, filtered by type: CC, FV, etc.) */
 export async function fetchDocumentTypes(type?: string): Promise<SiigoDocumentType[]> {
+  const key = `document-types:${type ?? ''}`;
   const params: Record<string, string> = {};
   if (type) params.type = type;
-  return siigoGet<SiigoDocumentType[]>('/v1/document-types', params);
+  return getCachedOrFetch(key, CACHE_24H, () =>
+    siigoGet<SiigoDocumentType[]>('/v1/document-types', params).then(d => Array.isArray(d) ? d : [d])
+  );
 }
 
 /** Create a journal entry (comprobante contable) in Siigo */
@@ -312,4 +352,10 @@ export async function fetchAllPurchases(): Promise<SiigoPurchase[]> {
 export function invalidateToken() {
   cachedToken = null;
   tokenExpiresAt = 0;
+}
+
+/** Invalidate data cache. Pass a key to invalidate one entry, or omit to clear all. */
+export function invalidateDataCache(key?: string) {
+  if (key) _dataCache.delete(key);
+  else _dataCache.clear();
 }

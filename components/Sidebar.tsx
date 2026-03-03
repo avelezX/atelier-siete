@@ -20,6 +20,7 @@ import {
   Landmark,
   DollarSign,
   BookOpen,
+  Wrench,
 } from "lucide-react";
 
 interface MenuItem {
@@ -45,6 +46,7 @@ const menuSections: MenuSection[] = [
       { name: "Costo Cero", href: "/costo-cero", icon: AlertTriangle },
       { name: "Costos Estimados", href: "/costos-estimados", icon: Calculator },
       { name: "Costos Reales", href: "/cost-tracking", icon: DollarSign },
+      { name: "Corrección Costos", href: "/correccion-costos", icon: Wrench },
     ]
   },
   {

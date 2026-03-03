@@ -10,8 +10,9 @@ export async function GET(request: NextRequest) {
     if (!id) return NextResponse.json({ error: 'id es requerido' }, { status: 400 });
     const data = await fetchJournal(id);
     return NextResponse.json(data);
-  } catch (error: unknown) {
+  } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    console.error('[Siigo /journals GET]', message);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
@@ -155,11 +156,13 @@ export async function POST(request: NextRequest) {
         // Save to Supabase so dashboards reflect changes immediately
         try {
           await saveJournalToSupabase(response, journalRequest);
-        } catch {
+        } catch (err) {
           // Non-critical: journal exists in Siigo, Supabase will catch up on next sync
+          console.error('[Siigo /journals] Supabase save failed (non-critical):', err instanceof Error ? err.message : String(err));
         }
       } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : String(err);
+        console.error(`[Siigo /journals POST] Batch ${batchNum} failed:`, errMsg);
         results.push({
           batch: batchNum,
           product_codes: batch.map(p => p.product_code),
@@ -178,8 +181,9 @@ export async function POST(request: NextRequest) {
       fail_count: failCount,
       results,
     });
-  } catch (error: unknown) {
+  } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    console.error('[Siigo /journals POST]', message);
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }
