@@ -138,30 +138,31 @@ export async function GET() {
     // Valid PUC: starts with digit. Non-PUC: starts with letter = product code = inventory purchase
     const KNOWN_PUC_PREFIXES = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
 
-    function isInventoryPurchaseItem(accountCode: string): boolean {
-      if (!accountCode) return false;
-      // Modern method: 6135 (COGS) or 1435 (merchandise inventory)
-      if (accountCode.startsWith('6135') || accountCode.startsWith('1435')) return true;
-      // Historical method: account_code is a product code (starts with letter, not a PUC number)
-      if (!KNOWN_PUC_PREFIXES.includes(accountCode[0])) return true;
-      return false;
-    }
-
     function isProductCodeAccount(accountCode: string): boolean {
       if (!accountCode) return false;
       return !KNOWN_PUC_PREFIXES.includes(accountCode[0]);
     }
 
+    function isOwnInventoryPurchaseItem(accountCode: string): boolean {
+      if (!accountCode) return false;
+      // Modern method: 6135 (COGS) or 1435 (merchandise inventory) — always own
+      if (accountCode.startsWith('6135') || accountCode.startsWith('1435')) return true;
+      // Historical method: account_code is a product code — only if it's an OWN product
+      if (isProductCodeAccount(accountCode) && allOwnProductCodes.has(accountCode)) return true;
+      return false;
+    }
+
     const inventoryPurchaseItems = allPurchaseItems.filter((pi) =>
-      isInventoryPurchaseItem((pi.account_code as string) || '')
+      isOwnInventoryPurchaseItem((pi.account_code as string) || '')
     );
 
-    // === Build cost from historical FC (product code as account_code) ===
-    // These give us direct purchase cost per product code
+    // === Build cost from historical FC (product code as account_code, own products only) ===
     const fcCostByCode = new Map<string, { total: number; qty: number; count: number }>();
     allPurchaseItems.forEach((pi) => {
       const acctCode = (pi.account_code as string) || '';
       if (!isProductCodeAccount(acctCode)) return;
+      // Only own products for cost derivation
+      if (!allOwnProductCodes.has(acctCode)) return;
       const price = Number(pi.price) || 0;
       const qty = Number(pi.quantity) || 1;
       if (!fcCostByCode.has(acctCode)) fcCostByCode.set(acctCode, { total: 0, qty: 0, count: 0 });
