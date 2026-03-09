@@ -620,16 +620,18 @@ export async function GET(request: NextRequest) {
       cogsItems.push({ key: supplierName, month, value: Number(item.value) || 0 });
     });
 
-    // Gastos by subcategory (reuse allExpenses)
+    // Gastos by supplier/source (reuse allExpenses)
     function expenseBreakdown(prefix: string): RowBreakdown[] {
       const items = allExpenses
         .filter((e) => e.account_code.startsWith(prefix))
         .map((e) => ({
-          key: e.account_code.substring(0, 4),
+          key: e.source === 'FC'
+            ? (e.supplier_name || 'SIN PROVEEDOR')
+            : (e.description || e.document_name || 'Comprobante Contable'),
           month: e.month,
           value: e.value,
         }));
-      return buildTopBreakdowns(items, (key) => getExpenseCategory(key));
+      return buildTopBreakdowns(items, (k) => k, 8);
     }
 
     const row_details = {
