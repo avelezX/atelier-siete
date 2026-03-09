@@ -372,39 +372,10 @@ export async function GET() {
       suppliers_count: suppliers.length,
     };
 
-    // === Diagnostic: why are sales low? ===
-    const totalInvoiceItems = invoiceItems.length;
-    const withProductCode = invoiceItems.filter((ii) => (ii.product_code as string)?.length > 0);
-    const matchedOwn = invoiceItems.filter((ii) => allOwnProductCodes.has((ii.product_code as string) || ''));
-    const onValidInvoice = invoiceItems.filter((ii) => validInvoiceIds.has(ii.invoice_id as string));
-    // Sample unmatched product codes
-    const unmatchedCodes = new Set<string>();
-    invoiceItems.forEach((ii) => {
-      const code = (ii.product_code as string) || '';
-      if (code && !allOwnProductCodes.has(code) && unmatchedCodes.size < 20) {
-        unmatchedCodes.add(code);
-      }
-    });
-    // Sample own product codes
-    const sampleOwnCodes = Array.from(allOwnProductCodes).slice(0, 20);
-
-    const diagnostic = {
-      total_invoice_items: totalInvoiceItems,
-      with_product_code: withProductCode.length,
-      without_product_code: totalInvoiceItems - withProductCode.length,
-      on_valid_invoice: onValidInvoice.length,
-      matched_own_product: matchedOwn.length,
-      not_matched: withProductCode.length - matchedOwn.length,
-      all_own_product_codes_count: allOwnProductCodes.size,
-      sample_unmatched_codes: Array.from(unmatchedCodes),
-      sample_own_codes: sampleOwnCodes,
-    };
-
     return NextResponse.json({
       summary,
       suppliers,
       monthly_movement: monthlyMovement,
-      _diagnostic: diagnostic,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
