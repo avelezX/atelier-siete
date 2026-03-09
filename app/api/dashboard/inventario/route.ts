@@ -72,12 +72,20 @@ const MONTH_NAMES = [
 
 export async function GET() {
   try {
-    // 1. Own products with stock
+    // 1. Own products with stock (for inventory display)
     const products = await fetchAllRows(
       'products',
       'code, name, available_quantity, cost, sale_price, sale_price_no_iva, supplier_name',
       (q) => q.eq('active', true).eq('is_consignment', false).gt('available_quantity', 0)
     );
+
+    // 1b. ALL own product codes (including sold-out) for sales movement tracking
+    const allOwnProducts = await fetchAllRows(
+      'products',
+      'code',
+      (q) => q.eq('is_consignment', false)
+    );
+    const allOwnProductCodes = new Set(allOwnProducts.map((p) => (p.code as string) || ''));
 
     // 2. COGS journal items (6135 Debit) — cost per product code
     const cogsItems = await fetchAllRows(
@@ -262,16 +270,13 @@ export async function GET() {
       .sort((a, b) => b.total_sale_value - a.total_sale_value);
 
     // === Monthly movement (purchases + sales for own products) ===
-    const ownProductCodes = new Set(productList.map((p) => p.code));
-
-    // Sales by month (only own products)
+    // Use allOwnProductCodes (includes sold-out products) so historical sales appear
     const salesByMonth = new Map<string, { value: number; units: number; count: number }>();
     invoiceItems.forEach((ii) => {
       const invId = ii.invoice_id as string;
       if (!validInvoiceIds.has(invId)) return;
       const code = (ii.product_code as string) || '';
-      // Include all sales of own-type products (even if currently zero stock)
-      // We track by product code match
+      if (!allOwnProductCodes.has(code)) return;
       const date = invoiceDateMap.get(invId);
       if (!date) return;
       const month = date.substring(0, 7);
@@ -281,12 +286,9 @@ export async function GET() {
       const qty = Number(ii.quantity) || 0;
       if (!salesByMonth.has(month)) salesByMonth.set(month, { value: 0, units: 0, count: 0 });
       const entry = salesByMonth.get(month)!;
-      // Only count if product is/was own
-      if (ownProductCodes.has(code)) {
-        entry.value += saleNoIva;
-        entry.units += qty;
-        entry.count += 1;
-      }
+      entry.value += saleNoIva;
+      entry.units += qty;
+      entry.count += 1;
     });
 
     // Purchases by month (all inventory items: 6135/1435 + historical product-code accounts)
