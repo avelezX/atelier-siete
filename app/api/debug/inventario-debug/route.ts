@@ -26,85 +26,84 @@ async function fetchAllRows(
 
 export async function GET() {
   try {
-    const allOwnProducts = await fetchAllRows('products', 'code', (q) => q.eq('is_consignment', false));
-    const allOwnProductCodes = new Set(allOwnProducts.map((p) => (p.code as string) || ''));
+    // Check product classification
+    const allProducts = await fetchAllRows('products', 'code, name, is_consignment, account_group_name, supplier_name, active');
 
-    const allPurchaseItems = await fetchAllRows(
+    const ownProducts = allProducts.filter(p => p.is_consignment === false);
+    const consignmentProducts = allProducts.filter(p => p.is_consignment === true);
+    const nullGroup = allProducts.filter(p => !p.account_group_name);
+    const ownNullGroup = ownProducts.filter(p => !p.account_group_name);
+
+    // Group own products by account_group_name
+    const groupCounts: Record<string, number> = {};
+    ownProducts.forEach(p => {
+      const group = (p.account_group_name as string) || '(null/empty)';
+      groupCounts[group] = (groupCounts[group] || 0) + 1;
+    });
+
+    const allOwnCodes = new Set(ownProducts.map(p => (p.code as string) || ''));
+
+    // Get ALL Product-type purchase items (paginated)
+    const productPurchaseItems = await fetchAllRows(
       'purchase_items',
-      'purchase_id, account_code, item_type, product_code, price, quantity, line_total'
+      'product_code, price, quantity, line_total',
+      (q) => q.eq('item_type', 'Product')
     );
 
-    function isOwnInventoryPurchaseItem(pi: Record<string, unknown>): boolean {
-      const itemType = (pi.item_type as string) || null;
-      const productCode = (pi.product_code as string) || '';
-      const accountCode = (pi.account_code as string) || '';
+    // Match against own codes
+    let ownTotal = 0;
+    let ownCount = 0;
+    let consTotal = 0;
+    let consCount = 0;
+    const ownCodeTotals: Record<string, number> = {};
 
-      if (itemType === 'Product') {
-        return productCode ? allOwnProductCodes.has(productCode) : false;
+    for (const pi of productPurchaseItems) {
+      const code = (pi.product_code as string) || '';
+      const value = (Number(pi.price) || 0) * (Number(pi.quantity) || 1);
+      if (allOwnCodes.has(code)) {
+        ownTotal += value;
+        ownCount++;
+        ownCodeTotals[code] = (ownCodeTotals[code] || 0) + value;
+      } else {
+        consTotal += value;
+        consCount++;
       }
-      if (itemType === 'Account') {
-        return accountCode.startsWith('6135') || accountCode.startsWith('1435');
-      }
-      if (itemType === 'FixedAsset') {
-        return false;
-      }
-      // Legacy
-      if (accountCode && !/^[0-9]/.test(accountCode)) {
-        return allOwnProductCodes.has(accountCode);
-      }
-      if (accountCode.startsWith('6135') || accountCode.startsWith('1435')) {
-        return true;
-      }
-      return false;
     }
 
-    const filtered = allPurchaseItems.filter(isOwnInventoryPurchaseItem);
-
-    // Calculate total with price*qty (as inventario route does)
-    const totalPriceQty = filtered.reduce((s, pi) => {
-      return s + (Number(pi.price) || 0) * (Number(pi.quantity) || 1);
-    }, 0);
-
-    // Calculate total with line_total
-    const totalLineTotal = filtered.reduce((s, pi) => {
-      return s + (Number(pi.line_total) || 0);
-    }, 0);
-
-    // All items total (unfiltered)
-    const allTotalPriceQty = allPurchaseItems.reduce((s, pi) => {
-      return s + (Number(pi.price) || 0) * (Number(pi.quantity) || 1);
-    }, 0);
-
-    // Sample some filtered items
-    const sampleFiltered = filtered.slice(0, 10).map(pi => ({
-      item_type: pi.item_type,
-      account_code: pi.account_code,
-      product_code: pi.product_code,
-      price: pi.price,
-      quantity: pi.quantity,
-      line_total: pi.line_total,
-      price_x_qty: (Number(pi.price) || 0) * (Number(pi.quantity) || 1),
-    }));
+    // Top 20 own codes by purchase value
+    const topOwnCodes = Object.entries(ownCodeTotals)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 20)
+      .map(([code, total]) => {
+        const prod = allProducts.find(p => p.code === code);
+        return {
+          code,
+          name: prod?.name || '?',
+          supplier: prod?.supplier_name || '?',
+          group: prod?.account_group_name || '(null)',
+          is_consignment: prod?.is_consignment,
+          active: prod?.active,
+          purchase_total: Math.round(total),
+        };
+      });
 
     return NextResponse.json({
-      total_items: allPurchaseItems.length,
-      filtered_items: filtered.length,
-      all_total_price_qty: Math.round(allTotalPriceQty),
-      filtered_total_price_qty: Math.round(totalPriceQty),
-      filtered_total_line_total: Math.round(totalLineTotal),
-      by_type_all: {
-        Product: allPurchaseItems.filter(pi => pi.item_type === 'Product').length,
-        Account: allPurchaseItems.filter(pi => pi.item_type === 'Account').length,
-        FixedAsset: allPurchaseItems.filter(pi => pi.item_type === 'FixedAsset').length,
-        null: allPurchaseItems.filter(pi => !pi.item_type).length,
+      products: {
+        total: allProducts.length,
+        own: ownProducts.length,
+        consignment: consignmentProducts.length,
+        null_group: nullGroup.length,
+        own_with_null_group: ownNullGroup.length,
+        own_groups: groupCounts,
       },
-      by_type_filtered: {
-        Product: filtered.filter(pi => pi.item_type === 'Product').length,
-        Account: filtered.filter(pi => pi.item_type === 'Account').length,
-        FixedAsset: filtered.filter(pi => pi.item_type === 'FixedAsset').length,
-        null: filtered.filter(pi => !pi.item_type).length,
+      purchase_items_product_type: {
+        total: productPurchaseItems.length,
+        own_match: ownCount,
+        consignment_match: consCount,
+        own_total: Math.round(ownTotal),
+        consignment_total: Math.round(consTotal),
       },
-      sample_filtered: sampleFiltered,
+      top_20_own_by_purchase_value: topOwnCodes,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
