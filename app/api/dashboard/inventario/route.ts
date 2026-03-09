@@ -146,44 +146,49 @@ export async function GET() {
       else ownSupplierNames.add(supplier.toUpperCase());
     });
 
-    // Manual mapping: purchase legal names → canonical product supplier name
-    // These are suppliers whose legal name in purchase invoices differs from products table
+    // Explicit exclusion: purchase suppliers that are consignment or non-inventory
+    // Based on manual review with business owner (2026-03-09)
+    const EXCLUDE_PURCHASE_SUPPLIERS = new Set([
+      // Consignment suppliers (confirmed by owner)
+      'LEKAMP SAS',
+      'HILALMA',
+      'CRETA',
+      'ELSA URIBE',
+      'GLORIA LUCIA CUARTAS ESTRADA', // = Elsa Uribe
+      'FENOMENA SAS',
+      'MARTIN BOTERO LUCK AND LOAD', // = Luck & Load
+      'LA FAMILIA DEL MONO S.A.S. SAJU', // = Saju
+      'ALEJANDRA ANDRADE LONDOÑO',
+      'ALUMAR SAS',
+      'VALERIA LONDOÑO MORENO',
+      'ALELI HOME DECOR S.A.S', // Consignación, no propio
+      'ZORRO Y JAGUAR SAS', // Consignación
+      'ABITA HOME DECO', // Consignación
+      // Non-inventory (payment processors, services)
+      'WOMPI S.A.S.',
+      'PROMOTORA DE COMERCIOS TURBACO S.A.S',
+      'PRANHA CENTRO EMPRESARIAL',
+    ]);
+
+    // Alias for name matching from products table (auto-detected consignment)
     const PURCHASE_SUPPLIER_ALIAS: Record<string, string> = {
-      // Consignment suppliers with different legal names
-      'FENOMENA SAS': 'FENOMENA',
-      'MARTIN BOTERO LUCK AND LOAD': 'LUCK&LOAD',
-      'LA FAMILIA DEL MONO S.A.S. SAJU': 'SAJU',
-      'VALERIA LONDOÑO MORENO': 'VALERIA LONDOÑO',
-      'ALEJANDRA ANDRADE LONDOÑO': 'ALEJANDRA ANDRADE',
-      'ALUMAR SAS': 'ALUMAR',
-      'LEKAMP SAS': 'LEKAMP',
-      'GLORIA LUCIA CUARTAS ESTRADA': 'ELSA URIBE',
-      // Own suppliers with different legal names
+      'TUCURINCA MOBILIARIOS S.A.S.': 'TUCURINCA',
       'EURODIS SAS': 'EURODIS',
       'AMBIENTE GOURMET / LIVING': 'AMBIENTE GOURMET',
       '111 CHOCOLATES SAS': '111 CHOCOLATES',
       'VIVERO LOS CEREZOS SAS': 'VIVERO LOS CEREZOS',
       'DIFFERENTE COFFEE SAS SAS': 'DIFFERENTE COFFEE',
-      // Mixed suppliers
-      'TUCURINCA MOBILIARIOS S.A.S.': 'TUCURINCA',
-      'ZORRO Y JAGUAR SAS': 'ZORRO Y JAGUAR',
-      'ABITA HOME DECO': 'ABITA',
       'VALERIA SALAZAR GUTIERREZ ARBIF': 'ARBIF',
       'VALENTINA CASTAÑO CORREA OBRA NEGRA': 'OBRA NEGRA',
-      // Non-inventory (payment processors, services)
-      'WOMPI S.A.S.': '_NOT_INVENTORY',
-      'PROMOTORA DE COMERCIOS TURBACO S.A.S': '_NOT_INVENTORY',
-      'PRANHA CENTRO EMPRESARIAL': '_NOT_INVENTORY',
     };
 
     function isPurchaseFromConsignmentSupplier(purchaseId: string): boolean {
       const rawSupplier = purchaseSupplierMap.get(purchaseId) || '';
-      const upperSupplier = rawSupplier.toUpperCase();
-      // Check alias map first
+      // 1. Check explicit exclusion list
+      if (EXCLUDE_PURCHASE_SUPPLIERS.has(rawSupplier)) return true;
+      // 2. Check alias → then consignment-only in products table
       const alias = PURCHASE_SUPPLIER_ALIAS[rawSupplier];
-      if (alias === '_NOT_INVENTORY') return true; // Treat non-inventory as "exclude"
-      const canonical = alias ? alias.toUpperCase() : upperSupplier;
-      // If canonical is a known consignment-only supplier, exclude
+      const canonical = alias ? alias.toUpperCase() : rawSupplier.toUpperCase();
       if (consignmentSupplierNames.has(canonical) && !ownSupplierNames.has(canonical)) return true;
       return false;
     }
