@@ -360,6 +360,27 @@ export async function GET() {
     const fromFC = productList.filter((p) => p.cost_source.startsWith('FC directa'));
     const fromCOGS = productList.filter((p) => p.cost_source.startsWith('COGS 6135'));
 
+    // DEBUG: check filter is working
+    const debugPurchases = {
+      total_items: allPurchaseItems.length,
+      filtered_items: inventoryPurchaseItems.length,
+      filtered_total: Math.round(inventoryPurchaseItems.reduce((s, pi) => {
+        const price = Number(pi.price) || 0;
+        const qty = Number(pi.quantity) || 1;
+        return s + price * qty;
+      }, 0)),
+      by_type: {
+        product: allPurchaseItems.filter(pi => pi.item_type === 'Product').length,
+        account: allPurchaseItems.filter(pi => pi.item_type === 'Account').length,
+        null: allPurchaseItems.filter(pi => !pi.item_type).length,
+      },
+      filtered_by_type: {
+        product: inventoryPurchaseItems.filter(pi => pi.item_type === 'Product').length,
+        account: inventoryPurchaseItems.filter(pi => pi.item_type === 'Account').length,
+        null: inventoryPurchaseItems.filter(pi => !pi.item_type).length,
+      },
+    };
+
     const summary = {
       total_products: productList.length,
       total_units: productList.reduce((s, p) => s + p.qty, 0),
@@ -399,6 +420,7 @@ export async function GET() {
       summary,
       suppliers,
       monthly_movement: monthlyMovement,
+      _debug_purchases: debugPurchases,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
