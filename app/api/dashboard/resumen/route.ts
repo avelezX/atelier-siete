@@ -43,10 +43,24 @@ interface MonthData {
   iva_generado: number;
   iva_nc: number;
   iva_descontable: number;
+  iva_descontable_journals: number;  // 2408 from journals (CC)
+  iva_descontable_purchases: number; // tax_value from purchases (FC)
   iva_neto: number;
   renta_estimada: number;
   invoices_count: number;
   cn_count: number;
+}
+
+// IVA detail item for audit
+interface IvaDetailItem {
+  source: 'CC' | 'FC' | 'INV' | 'NC';
+  document_name: string;
+  date: string;
+  month: string;
+  description: string;
+  supplier_name: string | null;
+  account_code: string | null;
+  value: number;
 }
 
 // Individual expense item for the expandable detail view
@@ -321,20 +335,85 @@ export async function GET(request: NextRequest) {
       gastosByMonth.set(exp.month, curr);
     });
 
-    // --- Group IVA descontable by month (journals + purchases) ---
-    const ivaDescByMonth = new Map<string, number>();
+    // --- Group IVA descontable by month (SEPARATE sources to detect double-counting) ---
+    // Source 1: Journal entries with account 2408 (Debit) — this is the accounting truth
+    const ivaDescJournalsByMonth = new Map<string, number>();
+    const ivaDetailItems: IvaDetailItem[] = [];
     ivaDescontableJournal.forEach((item) => {
       const journalDate = journalDateMap.get(item.journal_id as string);
       const month = journalDate?.substring(0, 7);
       if (!month) return;
-      ivaDescByMonth.set(month, (ivaDescByMonth.get(month) || 0) + (Number(item.value) || 0));
+      const value = Number(item.value) || 0;
+      ivaDescJournalsByMonth.set(month, (ivaDescJournalsByMonth.get(month) || 0) + value);
+      ivaDetailItems.push({
+        source: 'CC',
+        document_name: journalNameMap.get(item.journal_id as string) || '',
+        date: journalDate || '',
+        month,
+        description: `Cuenta ${item.account_code as string}`,
+        supplier_name: null,
+        account_code: item.account_code as string,
+        value,
+      });
     });
+
+    // Source 2: Purchase items with tax_value > 0 — the raw purchase IVA
+    const ivaDescPurchasesByMonth = new Map<string, number>();
     ivaPurchase.forEach((item) => {
       const purchaseDate = purchaseDateMap.get(item.purchase_id as string);
       const month = purchaseDate?.substring(0, 7);
       if (!month) return;
-      ivaDescByMonth.set(month, (ivaDescByMonth.get(month) || 0) + (Number(item.tax_value) || 0));
+      const value = Number(item.tax_value) || 0;
+      ivaDescPurchasesByMonth.set(month, (ivaDescPurchasesByMonth.get(month) || 0) + value);
+      ivaDetailItems.push({
+        source: 'FC',
+        document_name: purchaseNameMap.get(item.purchase_id as string) || '',
+        date: purchaseDate || '',
+        month,
+        description: 'IVA factura de compra',
+        supplier_name: purchaseSupplierMap.get(item.purchase_id as string) || null,
+        account_code: null,
+        value,
+      });
     });
+
+    // IVA Generado detail (from invoices)
+    invoices.forEach((inv) => {
+      const taxAmt = Number(inv.tax_amount) || 0;
+      if (taxAmt <= 0) return;
+      const invDate = (inv.date as string) || '';
+      ivaDetailItems.push({
+        source: 'INV',
+        document_name: (inv.name as string) || '',
+        date: invDate,
+        month: invDate.substring(0, 7),
+        description: `IVA venta a ${(inv.customer_name as string) || ''}`,
+        supplier_name: null,
+        account_code: null,
+        value: taxAmt,
+      });
+    });
+
+    // IVA NC detail (from credit notes)
+    creditNotes.forEach((cn) => {
+      const taxAmt = Number(cn.tax_amount) || 0;
+      if (taxAmt <= 0) return;
+      const cnDate = (cn.date as string) || '';
+      ivaDetailItems.push({
+        source: 'NC',
+        document_name: '',
+        date: cnDate,
+        month: cnDate.substring(0, 7),
+        description: 'IVA nota crédito',
+        supplier_name: null,
+        account_code: null,
+        value: taxAmt,
+      });
+    });
+
+    // Use ONLY journals (2408) as IVA descontable — purchases likely duplicate
+    // We report both separately so the user can audit
+    const ivaDescByMonth = ivaDescJournalsByMonth;
 
     // --- Collect all months ---
     const allMonths = new Set<string>();
@@ -386,6 +465,8 @@ export async function GET(request: NextRequest) {
         iva_generado: ivaGenerado,
         iva_nc: ivaNc,
         iva_descontable: ivaDesc,
+        iva_descontable_journals: ivaDescJournalsByMonth.get(month) || 0,
+        iva_descontable_purchases: ivaDescPurchasesByMonth.get(month) || 0,
         iva_neto: ivaNeto,
         renta_estimada: rentaEstimada,
         invoices_count: inv.count,
@@ -411,6 +492,8 @@ export async function GET(request: NextRequest) {
         iva_generado: acc.iva_generado + m.iva_generado,
         iva_nc: acc.iva_nc + m.iva_nc,
         iva_descontable: acc.iva_descontable + m.iva_descontable,
+        iva_descontable_journals: acc.iva_descontable_journals + m.iva_descontable_journals,
+        iva_descontable_purchases: acc.iva_descontable_purchases + m.iva_descontable_purchases,
         iva_neto: acc.iva_neto + m.iva_neto,
         renta_estimada: acc.renta_estimada + m.renta_estimada,
         invoices_count: acc.invoices_count + m.invoices_count,
@@ -421,7 +504,9 @@ export async function GET(request: NextRequest) {
         ventas_brutas: 0, notas_credito: 0, ventas_netas: 0, costo_ventas: 0,
         utilidad_bruta: 0, margen_bruto_pct: 0, gastos_admin: 0, gastos_venta: 0,
         gastos_financieros: 0, total_gastos: 0, utilidad_operativa: 0,
-        iva_generado: 0, iva_nc: 0, iva_descontable: 0, iva_neto: 0,
+        iva_generado: 0, iva_nc: 0, iva_descontable: 0,
+        iva_descontable_journals: 0, iva_descontable_purchases: 0,
+        iva_neto: 0,
         renta_estimada: 0, invoices_count: 0, cn_count: 0,
       }
     );
@@ -642,12 +727,49 @@ export async function GET(request: NextRequest) {
       gastos_financieros: expenseBreakdown('53'),
     };
 
+    // Build IVA detail grouped by supplier for FC, by document for CC
+    const ivaBySupplier = new Map<string, { source: string; items: IvaDetailItem[]; total: number }>();
+    ivaDetailItems
+      .filter(i => i.source === 'FC' || i.source === 'CC')
+      .forEach((item) => {
+        const key = item.source === 'FC'
+          ? (item.supplier_name || item.document_name || 'SIN PROVEEDOR')
+          : (item.document_name || 'Comprobante');
+        if (!ivaBySupplier.has(key)) {
+          ivaBySupplier.set(key, { source: item.source, items: [], total: 0 });
+        }
+        const g = ivaBySupplier.get(key)!;
+        g.items.push(item);
+        g.total += item.value;
+      });
+
+    const iva_detail = {
+      generado: ivaDetailItems.filter(i => i.source === 'INV'),
+      nc: ivaDetailItems.filter(i => i.source === 'NC'),
+      descontable_by_supplier: Array.from(ivaBySupplier.entries())
+        .map(([name, data]) => ({
+          name,
+          source: data.source,
+          total: data.total,
+          count: data.items.length,
+          items: data.items.sort((a, b) => b.value - a.value),
+        }))
+        .sort((a, b) => b.total - a.total),
+      warning_double_count: {
+        total_journals_2408: Array.from(ivaDescJournalsByMonth.values()).reduce((s, v) => s + v, 0),
+        total_purchases_tax: Array.from(ivaDescPurchasesByMonth.values()).reduce((s, v) => s + v, 0),
+        using: 'journals_2408' as const,
+        note: 'Si ambos totales son similares, probablemente hay doble conteo entre CC y FC. Usamos solo journals (2408) como fuente contable.',
+      },
+    };
+
     return NextResponse.json({
       months,
       totals,
       gastos_groups,
       ventas_by_supplier,
       row_details,
+      iva_detail,
       iva_mode: ivaMode,
       data_counts: {
         invoices: invoices.length,
