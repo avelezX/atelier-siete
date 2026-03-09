@@ -211,36 +211,18 @@ export async function GET(request: NextRequest) {
       invoiceCustomerMap.set(id, (inv.customer_name as string) || '');
     });
 
-    // --- Group invoices by month (from invoice_items for consistency) ---
-    // Count invoices from headers
-    const invoiceCountByMonth = new Map<string, number>();
+    // --- Group invoices by month (from invoice headers) ---
+    const invoicesByMonth = new Map<string, { total: number; subtotal: number; tax: number; count: number }>();
     invoices.forEach((inv) => {
       const month = (inv.date as string)?.substring(0, 7);
       if (!month) return;
-      invoiceCountByMonth.set(month, (invoiceCountByMonth.get(month) || 0) + 1);
-    });
-
-    // Revenue from invoice_items (same method as correccion-costos, cost-tracking, etc.)
-    const invoicesByMonth = new Map<string, { total: number; subtotal: number; tax: number; count: number }>();
-    invoiceItems.forEach((item) => {
-      const invoiceId = item.invoice_id as string;
-      if (!validInvoiceIds.has(invoiceId)) return;
-      const month = invoiceDateMap.get(invoiceId)?.substring(0, 7);
-      if (!month) return;
-      const lineTotal = Number(item.line_total) || 0;
-      const taxValue = Number(item.tax_value) || 0;
       const curr = invoicesByMonth.get(month) || { total: 0, subtotal: 0, tax: 0, count: 0 };
-      curr.total += lineTotal;                 // con IVA
-      curr.subtotal += lineTotal - taxValue;   // sin IVA
-      curr.tax += taxValue;
+      curr.total += Number(inv.total) || 0;
+      curr.subtotal += Number(inv.subtotal) || 0;
+      curr.tax += Number(inv.tax_amount) || 0;
+      curr.count += 1;
       invoicesByMonth.set(month, curr);
     });
-    // Set invoice counts from headers
-    for (const [month, count] of invoiceCountByMonth) {
-      const curr = invoicesByMonth.get(month) || { total: 0, subtotal: 0, tax: 0, count: 0 };
-      curr.count = count;
-      invoicesByMonth.set(month, curr);
-    }
 
     // --- Group credit notes by month ---
     const cnByMonth = new Map<string, { total: number; subtotal: number; tax: number; count: number }>();
