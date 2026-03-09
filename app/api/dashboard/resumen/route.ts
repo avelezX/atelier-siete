@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { atelierTableAdmin } from '@/lib/supabase';
 
 // Fetch all rows handling Supabase 1000 row limit
@@ -98,9 +98,11 @@ interface SupplierRevenue {
   items: RevenueItem[];
 }
 
-// GET /api/dashboard/resumen
-export async function GET() {
+// GET /api/dashboard/resumen?iva_mode=sin_iva|con_iva
+export async function GET(request: NextRequest) {
   try {
+    const params = request.nextUrl.searchParams;
+    const ivaMode = params.get('iva_mode') === 'con_iva' ? 'con_iva' : 'sin_iva';
     // 1. Fetch all invoices (non-annulled) — includes id/name/customer for supplier breakdown
     const invoices = await fetchAllRows(
       'invoices',
@@ -180,7 +182,7 @@ export async function GET() {
     // 10. Fetch invoice items for revenue by supplier
     const invoiceItems = await fetchAllRows(
       'invoice_items',
-      'invoice_id, product_code, quantity, unit_price, line_total'
+      'invoice_id, product_code, quantity, unit_price, line_total, tax_value'
     );
 
     // 11. Fetch products for supplier mapping
@@ -200,32 +202,54 @@ export async function GET() {
     const invoiceDateMap = new Map<string, string>();
     const invoiceNameMap = new Map<string, string>();
     const invoiceCustomerMap = new Map<string, string>();
+    const validInvoiceIds = new Set<string>();
     invoices.forEach((inv) => {
-      invoiceDateMap.set(inv.id as string, (inv.date as string) || '');
-      invoiceNameMap.set(inv.id as string, (inv.name as string) || '');
-      invoiceCustomerMap.set(inv.id as string, (inv.customer_name as string) || '');
+      const id = inv.id as string;
+      validInvoiceIds.add(id);
+      invoiceDateMap.set(id, (inv.date as string) || '');
+      invoiceNameMap.set(id, (inv.name as string) || '');
+      invoiceCustomerMap.set(id, (inv.customer_name as string) || '');
     });
 
-    // --- Group invoices by month ---
-    const invoicesByMonth = new Map<string, { total: number; subtotal: number; tax: number; count: number }>();
+    // --- Group invoices by month (from invoice_items for consistency) ---
+    // Count invoices from headers
+    const invoiceCountByMonth = new Map<string, number>();
     invoices.forEach((inv) => {
       const month = (inv.date as string)?.substring(0, 7);
       if (!month) return;
-      const curr = invoicesByMonth.get(month) || { total: 0, subtotal: 0, tax: 0, count: 0 };
-      curr.total += Number(inv.total) || 0;
-      curr.subtotal += Number(inv.subtotal) || 0;
-      curr.tax += Number(inv.tax_amount) || 0;
-      curr.count += 1;
-      invoicesByMonth.set(month, curr);
+      invoiceCountByMonth.set(month, (invoiceCountByMonth.get(month) || 0) + 1);
     });
 
+    // Revenue from invoice_items (same method as correccion-costos, cost-tracking, etc.)
+    const invoicesByMonth = new Map<string, { total: number; subtotal: number; tax: number; count: number }>();
+    invoiceItems.forEach((item) => {
+      const invoiceId = item.invoice_id as string;
+      if (!validInvoiceIds.has(invoiceId)) return;
+      const month = invoiceDateMap.get(invoiceId)?.substring(0, 7);
+      if (!month) return;
+      const lineTotal = Number(item.line_total) || 0;
+      const taxValue = Number(item.tax_value) || 0;
+      const curr = invoicesByMonth.get(month) || { total: 0, subtotal: 0, tax: 0, count: 0 };
+      curr.total += lineTotal;                 // con IVA
+      curr.subtotal += lineTotal - taxValue;   // sin IVA
+      curr.tax += taxValue;
+      invoicesByMonth.set(month, curr);
+    });
+    // Set invoice counts from headers
+    for (const [month, count] of invoiceCountByMonth) {
+      const curr = invoicesByMonth.get(month) || { total: 0, subtotal: 0, tax: 0, count: 0 };
+      curr.count = count;
+      invoicesByMonth.set(month, curr);
+    }
+
     // --- Group credit notes by month ---
-    const cnByMonth = new Map<string, { total: number; tax: number; count: number }>();
+    const cnByMonth = new Map<string, { total: number; subtotal: number; tax: number; count: number }>();
     creditNotes.forEach((cn) => {
       const month = (cn.date as string)?.substring(0, 7);
       if (!month) return;
-      const curr = cnByMonth.get(month) || { total: 0, tax: 0, count: 0 };
+      const curr = cnByMonth.get(month) || { total: 0, subtotal: 0, tax: 0, count: 0 };
       curr.total += Number(cn.total) || 0;
+      curr.subtotal += (Number(cn.total) || 0) - (Number(cn.tax_amount) || 0); // sin IVA
       curr.tax += Number(cn.tax_amount) || 0;
       curr.count += 1;
       cnByMonth.set(month, curr);
@@ -272,16 +296,18 @@ export async function GET() {
       });
     });
 
-    // From purchase items (FC) — use price (base, sin IVA) as the expense value
+    // From purchase items (FC) — price is base (sin IVA), tax_value is the IVA
     gastosPurchase.forEach((item) => {
       const purchaseDate = purchaseDateMap.get(item.purchase_id as string);
       const month = purchaseDate?.substring(0, 7);
       if (!month) return;
       const qty = Number(item.quantity) || 1;
+      const baseValue = (Number(item.price) || 0) * qty;
+      const taxValue = Number(item.tax_value) || 0;
       allExpenses.push({
         month,
         account_code: item.account_code as string,
-        value: (Number(item.price) || 0) * qty,
+        value: ivaMode === 'con_iva' ? baseValue + taxValue : baseValue,
         source: 'FC',
         document_name: purchaseNameMap.get(item.purchase_id as string) || '',
         date: purchaseDate || '',
@@ -329,14 +355,19 @@ export async function GET() {
     const sortedMonths = Array.from(allMonths).sort();
 
     // --- Build monthly P&L data ---
+    // Revenue and credit notes respect ivaMode for consistency
     const months: MonthData[] = sortedMonths.map((month) => {
       const inv = invoicesByMonth.get(month) || { total: 0, subtotal: 0, tax: 0, count: 0 };
-      const cn = cnByMonth.get(month) || { total: 0, tax: 0, count: 0 };
+      const cn = cnByMonth.get(month) || { total: 0, subtotal: 0, tax: 0, count: 0 };
       const cogs = cogsByMonth.get(month) || 0;
       const gst = gastosByMonth.get(month) || { admin: 0, venta: 0, financieros: 0 };
       const ivaDesc = ivaDescByMonth.get(month) || 0;
 
-      const ventasNetas = inv.subtotal - cn.total;
+      // Con IVA: ventas = line_total, NC = total (con IVA)
+      // Sin IVA: ventas = line_total - tax_value, NC = total - tax (sin IVA)
+      const ventasBrutas = ivaMode === 'con_iva' ? inv.total : inv.subtotal;
+      const notasCredito = ivaMode === 'con_iva' ? cn.total : cn.subtotal;
+      const ventasNetas = ventasBrutas - notasCredito;
       const utilidadBruta = ventasNetas - cogs;
       const totalGastos = gst.admin + gst.venta + gst.financieros;
       const utilidadOperativa = utilidadBruta - totalGastos;
@@ -350,8 +381,8 @@ export async function GET() {
 
       return {
         month,
-        ventas_brutas: inv.subtotal,
-        notas_credito: cn.total,
+        ventas_brutas: ventasBrutas,
+        notas_credito: notasCredito,
         ventas_netas: ventasNetas,
         costo_ventas: cogs,
         utilidad_bruta: utilidadBruta,
@@ -472,9 +503,6 @@ export async function GET() {
     // --- Build revenue by supplier ---
     const supplierRevenueMap = new Map<string, { total: number; products: Set<string>; items: RevenueItem[] }>();
 
-    // Only include items from non-annulled invoices (invoiceHeaders already filtered)
-    const validInvoiceIds = new Set(invoices.map((inv) => inv.id as string));
-
     invoiceItems.forEach((item) => {
       const invoiceId = item.invoice_id as string;
       if (!validInvoiceIds.has(invoiceId)) return;
@@ -482,14 +510,16 @@ export async function GET() {
       const productCode = item.product_code as string;
       const supplierName = productSupplierMap.get(productCode) || 'SIN PROVEEDOR';
       const qty = Number(item.quantity) || 0;
+      const lineTotal = Number(item.line_total) || 0;
+      const taxValue = Number(item.tax_value) || 0;
       const unitPrice = Number(item.unit_price) || 0;
-      const subtotal = unitPrice * qty; // sin IVA
+      const itemValue = ivaMode === 'con_iva' ? lineTotal : (lineTotal - taxValue);
 
       if (!supplierRevenueMap.has(supplierName)) {
         supplierRevenueMap.set(supplierName, { total: 0, products: new Set(), items: [] });
       }
       const entry = supplierRevenueMap.get(supplierName)!;
-      entry.total += subtotal;
+      entry.total += itemValue;
       entry.products.add(productCode);
       entry.items.push({
         invoice_name: invoiceNameMap.get(invoiceId) || '',
@@ -499,7 +529,7 @@ export async function GET() {
         product_name: productNameMap.get(productCode) || productCode,
         quantity: qty,
         unit_price: unitPrice,
-        line_total: subtotal, // sin IVA
+        line_total: itemValue,
       });
     });
 
@@ -568,7 +598,7 @@ export async function GET() {
       return results;
     }
 
-    // Ventas Brutas by supplier
+    // Ventas Brutas by supplier (respects ivaMode)
     const ventasItems: Array<{ key: string; month: string; value: number }> = [];
     invoiceItems.forEach((item) => {
       const invoiceId = item.invoice_id as string;
@@ -577,10 +607,12 @@ export async function GET() {
       const supplierName = productSupplierMap.get(productCode) || 'SIN PROVEEDOR';
       const month = invoiceDateMap.get(invoiceId)?.substring(0, 7);
       if (!month) return;
+      const lineTotal = Number(item.line_total) || 0;
+      const taxValue = Number(item.tax_value) || 0;
       ventasItems.push({
         key: supplierName,
         month,
-        value: (Number(item.unit_price) || 0) * (Number(item.quantity) || 0),
+        value: ivaMode === 'con_iva' ? lineTotal : (lineTotal - taxValue),
       });
     });
 
@@ -621,6 +653,7 @@ export async function GET() {
       gastos_groups,
       ventas_by_supplier,
       row_details,
+      iva_mode: ivaMode,
       data_counts: {
         invoices: invoices.length,
         credit_notes: creditNotes.length,

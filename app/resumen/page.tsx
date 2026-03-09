@@ -95,12 +95,15 @@ interface RowDetails {
   gastos_financieros: RowBreakdown[];
 }
 
+type IvaMode = 'sin_iva' | 'con_iva';
+
 interface ResumenData {
   months: MonthData[];
   totals: MonthData;
   gastos_groups: ExpenseGroup[];
   ventas_by_supplier: SupplierRevenue[];
   row_details: RowDetails;
+  iva_mode: IvaMode;
   data_counts: {
     invoices: number;
     credit_notes: number;
@@ -322,6 +325,7 @@ export default function ResumenPage() {
   const [showVentas, setShowVentas] = useState(false);
   const [showIva, setShowIva] = useState(false);
   const [yearFilter, setYearFilter] = useState<YearFilter>(String(new Date().getFullYear()));
+  const [ivaMode, setIvaMode] = useState<IvaMode>('sin_iva');
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const router = useRouter();
 
@@ -338,7 +342,7 @@ export default function ResumenPage() {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/dashboard/resumen');
+      const res = await fetch(`/api/dashboard/resumen?iva_mode=${ivaMode}`);
       const json = await res.json();
       if (json.error) throw new Error(json.error);
       setData(json);
@@ -347,7 +351,7 @@ export default function ResumenPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [ivaMode]);
 
   useEffect(() => {
     loadData();
@@ -415,11 +419,36 @@ export default function ResumenPage() {
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Resumen Financiero</h1>
             <p className="text-gray-500">
-              Estado de Resultados, IVA y Renta
+              Estado de Resultados, IVA y Renta {ivaMode === 'con_iva' ? '(Con IVA)' : '(Sin IVA)'}
             </p>
           </div>
         </div>
         <div className="flex items-center space-x-3">
+          {/* IVA mode toggle */}
+          <div className="inline-flex rounded-lg border border-gray-300 overflow-hidden">
+            <button
+              onClick={() => setIvaMode('sin_iva')}
+              disabled={loading}
+              className={`px-3 py-2 text-sm font-medium transition-colors ${
+                ivaMode === 'sin_iva'
+                  ? 'bg-amber-600 text-white'
+                  : 'bg-white text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              Sin IVA
+            </button>
+            <button
+              onClick={() => setIvaMode('con_iva')}
+              disabled={loading}
+              className={`px-3 py-2 text-sm font-medium transition-colors ${
+                ivaMode === 'con_iva'
+                  ? 'bg-amber-600 text-white'
+                  : 'bg-white text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              Con IVA
+            </button>
+          </div>
           {/* Year filter */}
           <select
             value={yearFilter}
