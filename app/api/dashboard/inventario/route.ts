@@ -125,17 +125,70 @@ export async function GET() {
       'purchase_id, account_code, price, quantity, tax_value'
     );
 
-    // 7. Purchases for date mapping
-    const purchases = await fetchAllRows('purchases', 'id, date');
+    // 7. Purchases for date + supplier mapping
+    const purchases = await fetchAllRows('purchases', 'id, date, supplier_name');
     const purchaseDateMap = new Map<string, string>();
+    const purchaseSupplierMap = new Map<string, string>();
     purchases.forEach((p) => {
-      purchaseDateMap.set(p.id as string, (p.date as string) || '');
+      const pid = p.id as string;
+      purchaseDateMap.set(pid, (p.date as string) || '');
+      purchaseSupplierMap.set(pid, (p.supplier_name as string) || '');
     });
 
-    // === Classify purchase items: PUC inventory accounts vs product-code accounts ===
-    // Known PUC prefixes (Colombian chart of accounts): 1xxx-9xxx are standard
-    // The previous accountant used product codes (e.g. SILL, OCT-, MESA) as account_code
-    // Valid PUC: starts with digit. Non-PUC: starts with letter = product code = inventory purchase
+    // === Build consignment supplier set from products table ===
+    const allProducts = await fetchAllRows('products', 'supplier_name, is_consignment');
+    const consignmentSupplierNames = new Set<string>();
+    const ownSupplierNames = new Set<string>();
+    allProducts.forEach((p) => {
+      const supplier = (p.supplier_name as string) || '';
+      if (!supplier) return;
+      if (p.is_consignment) consignmentSupplierNames.add(supplier.toUpperCase());
+      else ownSupplierNames.add(supplier.toUpperCase());
+    });
+
+    // Manual mapping: purchase legal names → canonical product supplier name
+    // These are suppliers whose legal name in purchase invoices differs from products table
+    const PURCHASE_SUPPLIER_ALIAS: Record<string, string> = {
+      // Consignment suppliers with different legal names
+      'FENOMENA SAS': 'FENOMENA',
+      'MARTIN BOTERO LUCK AND LOAD': 'LUCK&LOAD',
+      'LA FAMILIA DEL MONO S.A.S. SAJU': 'SAJU',
+      'VALERIA LONDOÑO MORENO': 'VALERIA LONDOÑO',
+      'ALEJANDRA ANDRADE LONDOÑO': 'ALEJANDRA ANDRADE',
+      'ALUMAR SAS': 'ALUMAR',
+      'LEKAMP SAS': 'LEKAMP',
+      'GLORIA LUCIA CUARTAS ESTRADA': 'ELSA URIBE',
+      // Own suppliers with different legal names
+      'EURODIS SAS': 'EURODIS',
+      'AMBIENTE GOURMET / LIVING': 'AMBIENTE GOURMET',
+      '111 CHOCOLATES SAS': '111 CHOCOLATES',
+      'VIVERO LOS CEREZOS SAS': 'VIVERO LOS CEREZOS',
+      'DIFFERENTE COFFEE SAS SAS': 'DIFFERENTE COFFEE',
+      // Mixed suppliers
+      'TUCURINCA MOBILIARIOS S.A.S.': 'TUCURINCA',
+      'ZORRO Y JAGUAR SAS': 'ZORRO Y JAGUAR',
+      'ABITA HOME DECO': 'ABITA',
+      'VALERIA SALAZAR GUTIERREZ ARBIF': 'ARBIF',
+      'VALENTINA CASTAÑO CORREA OBRA NEGRA': 'OBRA NEGRA',
+      // Non-inventory (payment processors, services)
+      'WOMPI S.A.S.': '_NOT_INVENTORY',
+      'PROMOTORA DE COMERCIOS TURBACO S.A.S': '_NOT_INVENTORY',
+      'PRANHA CENTRO EMPRESARIAL': '_NOT_INVENTORY',
+    };
+
+    function isPurchaseFromConsignmentSupplier(purchaseId: string): boolean {
+      const rawSupplier = purchaseSupplierMap.get(purchaseId) || '';
+      const upperSupplier = rawSupplier.toUpperCase();
+      // Check alias map first
+      const alias = PURCHASE_SUPPLIER_ALIAS[rawSupplier];
+      if (alias === '_NOT_INVENTORY') return true; // Treat non-inventory as "exclude"
+      const canonical = alias ? alias.toUpperCase() : upperSupplier;
+      // If canonical is a known consignment-only supplier, exclude
+      if (consignmentSupplierNames.has(canonical) && !ownSupplierNames.has(canonical)) return true;
+      return false;
+    }
+
+    // === Classify purchase items ===
     const KNOWN_PUC_PREFIXES = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
 
     function isProductCodeAccount(accountCode: string): boolean {
@@ -143,17 +196,23 @@ export async function GET() {
       return !KNOWN_PUC_PREFIXES.includes(accountCode[0]);
     }
 
-    function isOwnInventoryPurchaseItem(accountCode: string): boolean {
+    function isOwnInventoryPurchaseItem(pi: Record<string, unknown>): boolean {
+      const accountCode = (pi.account_code as string) || '';
       if (!accountCode) return false;
-      // Modern method: 6135 (COGS) or 1435 (merchandise inventory) — always own
-      if (accountCode.startsWith('6135') || accountCode.startsWith('1435')) return true;
       // Historical method: account_code is a product code — only if it's an OWN product
-      if (isProductCodeAccount(accountCode) && allOwnProductCodes.has(accountCode)) return true;
+      if (isProductCodeAccount(accountCode)) {
+        return allOwnProductCodes.has(accountCode);
+      }
+      // Modern method: 6135/1435 — filter by supplier (exclude consignment suppliers)
+      if (accountCode.startsWith('6135') || accountCode.startsWith('1435')) {
+        const purchaseId = (pi.purchase_id as string) || '';
+        return !isPurchaseFromConsignmentSupplier(purchaseId);
+      }
       return false;
     }
 
     const inventoryPurchaseItems = allPurchaseItems.filter((pi) =>
-      isOwnInventoryPurchaseItem((pi.account_code as string) || '')
+      isOwnInventoryPurchaseItem(pi)
     );
 
     // === Build cost from historical FC (product code as account_code, own products only) ===
