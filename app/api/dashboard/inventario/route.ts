@@ -119,99 +119,50 @@ export async function GET() {
     });
     const validInvoiceIds = new Set(invoices.map((inv) => inv.id as string));
 
-    // 6. ALL purchase items (to capture both modern 6135/1435 AND historical product-code accounts)
+    // 6. ALL purchase items (with item_type and product_code from Siigo)
     const allPurchaseItems = await fetchAllRows(
       'purchase_items',
-      'purchase_id, account_code, price, quantity, tax_value'
+      'purchase_id, account_code, item_type, product_code, price, quantity, tax_value'
     );
 
-    // 7. Purchases for date + supplier mapping
-    const purchases = await fetchAllRows('purchases', 'id, date, supplier_name');
+    // 7. Purchases for date mapping
+    const purchases = await fetchAllRows('purchases', 'id, date');
     const purchaseDateMap = new Map<string, string>();
-    const purchaseSupplierMap = new Map<string, string>();
     purchases.forEach((p) => {
-      const pid = p.id as string;
-      purchaseDateMap.set(pid, (p.date as string) || '');
-      purchaseSupplierMap.set(pid, (p.supplier_name as string) || '');
+      purchaseDateMap.set(p.id as string, (p.date as string) || '');
     });
 
-    // === Build consignment supplier set from products table ===
-    const allProducts = await fetchAllRows('products', 'supplier_name, is_consignment');
-    const consignmentSupplierNames = new Set<string>();
-    const ownSupplierNames = new Set<string>();
-    allProducts.forEach((p) => {
-      const supplier = (p.supplier_name as string) || '';
-      if (!supplier) return;
-      if (p.is_consignment) consignmentSupplierNames.add(supplier.toUpperCase());
-      else ownSupplierNames.add(supplier.toUpperCase());
-    });
-
-    // Explicit exclusion: purchase suppliers that are consignment or non-inventory
-    // Based on manual review with business owner (2026-03-09)
-    const EXCLUDE_PURCHASE_SUPPLIERS = new Set([
-      // Consignment suppliers (confirmed by owner)
-      'LEKAMP SAS',
-      'HILALMA',
-      'CRETA',
-      'ELSA URIBE',
-      'GLORIA LUCIA CUARTAS ESTRADA', // = Elsa Uribe
-      'FENOMENA SAS',
-      'MARTIN BOTERO LUCK AND LOAD', // = Luck & Load
-      'LA FAMILIA DEL MONO S.A.S. SAJU', // = Saju
-      'ALEJANDRA ANDRADE LONDOÑO',
-      'ALUMAR SAS',
-      'VALERIA LONDOÑO MORENO',
-      'ALELI HOME DECOR S.A.S', // Consignación, no propio
-      'ZORRO Y JAGUAR SAS', // Consignación
-      'ABITA HOME DECO', // Consignación
-      // Non-inventory (payment processors, services)
-      'WOMPI S.A.S.',
-      'PROMOTORA DE COMERCIOS TURBACO S.A.S',
-      'PRANHA CENTRO EMPRESARIAL',
-    ]);
-
-    // Alias for name matching from products table (auto-detected consignment)
-    const PURCHASE_SUPPLIER_ALIAS: Record<string, string> = {
-      'TUCURINCA MOBILIARIOS S.A.S.': 'TUCURINCA',
-      'EURODIS SAS': 'EURODIS',
-      'AMBIENTE GOURMET / LIVING': 'AMBIENTE GOURMET',
-      '111 CHOCOLATES SAS': '111 CHOCOLATES',
-      'VIVERO LOS CEREZOS SAS': 'VIVERO LOS CEREZOS',
-      'DIFFERENTE COFFEE SAS SAS': 'DIFFERENTE COFFEE',
-      'VALERIA SALAZAR GUTIERREZ ARBIF': 'ARBIF',
-      'VALENTINA CASTAÑO CORREA OBRA NEGRA': 'OBRA NEGRA',
-    };
-
-    function isPurchaseFromConsignmentSupplier(purchaseId: string): boolean {
-      const rawSupplier = purchaseSupplierMap.get(purchaseId) || '';
-      // 1. Check explicit exclusion list
-      if (EXCLUDE_PURCHASE_SUPPLIERS.has(rawSupplier)) return true;
-      // 2. Check alias → then consignment-only in products table
-      const alias = PURCHASE_SUPPLIER_ALIAS[rawSupplier];
-      const canonical = alias ? alias.toUpperCase() : rawSupplier.toUpperCase();
-      if (consignmentSupplierNames.has(canonical) && !ownSupplierNames.has(canonical)) return true;
-      return false;
-    }
-
-    // === Classify purchase items ===
-    const KNOWN_PUC_PREFIXES = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
-
-    function isProductCodeAccount(accountCode: string): boolean {
-      if (!accountCode) return false;
-      return !KNOWN_PUC_PREFIXES.includes(accountCode[0]);
-    }
+    // === Classify purchase items as own inventory ===
+    // After migration 004 + re-sync, items have:
+    //   item_type='Product' + product_code → cross-reference with products.is_consignment
+    //   item_type='Account' + account_code=6135/1435 → inventory account (own by definition)
+    //   item_type='FixedAsset' → not inventory
+    //   item_type=null (pre-migration) → legacy: account_code is product code if non-numeric
 
     function isOwnInventoryPurchaseItem(pi: Record<string, unknown>): boolean {
+      const itemType = (pi.item_type as string) || null;
+      const productCode = (pi.product_code as string) || '';
       const accountCode = (pi.account_code as string) || '';
-      if (!accountCode) return false;
-      // Historical method: account_code is a product code — only if it's an OWN product
-      if (isProductCodeAccount(accountCode)) {
+
+      if (itemType === 'Product') {
+        // Siigo product reference → check if own product (not consignment)
+        return productCode ? allOwnProductCodes.has(productCode) : false;
+      }
+      if (itemType === 'Account') {
+        // PUC account → only 6135/1435 are inventory purchases
+        return accountCode.startsWith('6135') || accountCode.startsWith('1435');
+      }
+      if (itemType === 'FixedAsset') {
+        return false; // Fixed assets are not inventory
+      }
+      // Legacy (item_type is null — pre-migration data):
+      // account_code starting with letter = product code (old accountant method)
+      if (accountCode && !/^[0-9]/.test(accountCode)) {
         return allOwnProductCodes.has(accountCode);
       }
-      // Modern method: 6135/1435 — filter by supplier (exclude consignment suppliers)
+      // Legacy PUC accounts
       if (accountCode.startsWith('6135') || accountCode.startsWith('1435')) {
-        const purchaseId = (pi.purchase_id as string) || '';
-        return !isPurchaseFromConsignmentSupplier(purchaseId);
+        return true;
       }
       return false;
     }
@@ -220,17 +171,24 @@ export async function GET() {
       isOwnInventoryPurchaseItem(pi)
     );
 
-    // === Build cost from historical FC (product code as account_code, own products only) ===
+    // === Build cost from purchase items with product codes (FC directa) ===
     const fcCostByCode = new Map<string, { total: number; qty: number; count: number }>();
     allPurchaseItems.forEach((pi) => {
-      const acctCode = (pi.account_code as string) || '';
-      if (!isProductCodeAccount(acctCode)) return;
-      // Only own products for cost derivation
-      if (!allOwnProductCodes.has(acctCode)) return;
+      // Get product code from either new field or legacy account_code
+      const itemType = (pi.item_type as string) || null;
+      let code = '';
+      if (itemType === 'Product') {
+        code = (pi.product_code as string) || '';
+      } else if (!itemType) {
+        // Legacy: account_code is product code if non-numeric
+        const acct = (pi.account_code as string) || '';
+        if (acct && !/^[0-9]/.test(acct)) code = acct;
+      }
+      if (!code || !allOwnProductCodes.has(code)) return;
       const price = Number(pi.price) || 0;
       const qty = Number(pi.quantity) || 1;
-      if (!fcCostByCode.has(acctCode)) fcCostByCode.set(acctCode, { total: 0, qty: 0, count: 0 });
-      const entry = fcCostByCode.get(acctCode)!;
+      if (!fcCostByCode.has(code)) fcCostByCode.set(code, { total: 0, qty: 0, count: 0 });
+      const entry = fcCostByCode.get(code)!;
       entry.total += price * qty;
       entry.qty += qty;
       entry.count += 1;

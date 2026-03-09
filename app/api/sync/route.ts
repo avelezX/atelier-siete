@@ -586,10 +586,14 @@ export async function POST() {
         for (const item of p.items) {
           const ivaTax = item.taxes?.find(t => t.type === 'IVA');
           const retention = item.taxes?.find(t => t.type !== 'IVA');
+          const itemType = item.type || null; // 'Product', 'Account', 'FixedAsset'
+          const isProduct = itemType === 'Product';
           allPurchaseItems.push({
             purchase_id: dbId,
             siigo_item_id: item.id || null,
-            account_code: item.code || 'unknown',
+            item_type: itemType,
+            account_code: isProduct ? 'product' : (item.code || 'unknown'),
+            product_code: isProduct ? (item.code || null) : null,
             description: item.description || null,
             quantity: item.quantity || 1,
             price: item.price || 0,
