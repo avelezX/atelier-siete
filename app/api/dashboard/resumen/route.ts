@@ -57,7 +57,9 @@ interface ExpenseItem {
   account_code: string;
   description: string;
   supplier_name: string | null;
-  value: number;
+  value: number;       // base value (sin IVA) or full value for CC items
+  tax_value: number;   // IVA amount (0 for CC items)
+  value_with_tax: number; // value + tax_value
 }
 
 // Subcategory (e.g., 5120 Arrendamientos)
@@ -251,7 +253,9 @@ export async function GET(request: NextRequest) {
     interface RawExpense {
       month: string;
       account_code: string;
-      value: number; // price (sin IVA) for purchases, value for journals
+      value: number;       // displayed value (respects ivaMode)
+      tax_value: number;   // IVA amount (0 for CC)
+      base_value: number;  // value sin IVA
       source: 'CC' | 'FC';
       document_name: string;
       date: string;
@@ -266,10 +270,13 @@ export async function GET(request: NextRequest) {
       const journalDate = journalDateMap.get(item.journal_id as string);
       const month = journalDate?.substring(0, 7);
       if (!month) return;
+      const ccValue = Number(item.value) || 0;
       allExpenses.push({
         month,
         account_code: item.account_code as string,
-        value: Number(item.value) || 0,
+        value: ccValue,
+        tax_value: 0,
+        base_value: ccValue,
         source: 'CC',
         document_name: journalNameMap.get(item.journal_id as string) || '',
         date: journalDate || '',
@@ -290,6 +297,8 @@ export async function GET(request: NextRequest) {
         month,
         account_code: item.account_code as string,
         value: ivaMode === 'con_iva' ? baseValue + taxValue : baseValue,
+        tax_value: taxValue,
+        base_value: baseValue,
         source: 'FC',
         document_name: purchaseNameMap.get(item.purchase_id as string) || '',
         date: purchaseDate || '',
@@ -443,6 +452,8 @@ export async function GET(request: NextRequest) {
         description: exp.description,
         supplier_name: exp.supplier_name,
         value: exp.value,
+        tax_value: exp.tax_value,
+        value_with_tax: exp.base_value + exp.tax_value,
       });
     });
 

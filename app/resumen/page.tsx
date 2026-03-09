@@ -44,6 +44,8 @@ interface ExpenseItem {
   description: string;
   supplier_name: string | null;
   value: number;
+  tax_value: number;
+  value_with_tax: number;
 }
 
 interface ExpenseSubcategory {
@@ -166,6 +168,38 @@ function ExpenseGroupRow({ group, totalGastos, yearFilter }: { group: ExpenseGro
 
 function ExpenseSubcategoryRow({ sub, groupTotal }: { sub: ExpenseSubcategory; groupTotal: number }) {
   const [open, setOpen] = useState(false);
+  const [expandedSuppliers, setExpandedSuppliers] = useState<Set<string>>(new Set());
+
+  // Group items by supplier/source for audit view
+  const supplierGroups = (() => {
+    const map = new Map<string, { items: ExpenseItem[]; total: number; totalIva: number; totalBase: number }>();
+    sub.items.forEach((item) => {
+      // For CC items, group by document_name; for FC, by supplier_name
+      const key = item.source === 'FC'
+        ? (item.supplier_name || 'SIN PROVEEDOR')
+        : `CC: ${item.document_name || 'Sin documento'}`;
+      if (!map.has(key)) map.set(key, { items: [], total: 0, totalIva: 0, totalBase: 0 });
+      const g = map.get(key)!;
+      g.items.push(item);
+      g.total += item.value;
+      g.totalIva += item.tax_value;
+      g.totalBase += item.value_with_tax - item.tax_value;
+    });
+    return Array.from(map.entries())
+      .map(([name, data]) => ({ name, ...data }))
+      .sort((a, b) => b.total - a.total);
+  })();
+
+  const totalIvaSub = sub.items.reduce((s, i) => s + i.tax_value, 0);
+
+  function toggleSupplier(name: string) {
+    setExpandedSuppliers((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  }
 
   return (
     <div>
@@ -178,6 +212,11 @@ function ExpenseSubcategoryRow({ sub, groupTotal }: { sub: ExpenseSubcategory; g
           <span className="font-medium text-gray-700">{sub.category}</span>
           <span className="text-xs text-gray-400 font-mono">{sub.account_prefix}</span>
           <span className="text-xs text-gray-400">({sub.entries})</span>
+          {totalIvaSub > 0 && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-700 font-medium">
+              IVA: {formatCurrency(totalIvaSub)}
+            </span>
+          )}
         </div>
         <div className="flex items-center space-x-4">
           <span className="text-xs text-gray-400">{pct(sub.total, groupTotal)}</span>
@@ -186,36 +225,84 @@ function ExpenseSubcategoryRow({ sub, groupTotal }: { sub: ExpenseSubcategory; g
       </button>
       {open && (
         <div className="pl-5 mb-1">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="text-gray-400 uppercase">
-                <th className="text-left py-1 px-2 font-medium">Fuente</th>
-                <th className="text-left py-1 px-2 font-medium">Documento</th>
-                <th className="text-left py-1 px-2 font-medium">Fecha</th>
-                <th className="text-left py-1 px-2 font-medium">Proveedor / Descripcion</th>
-                <th className="text-right py-1 px-2 font-medium">Valor</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sub.items.map((item, idx) => (
-                <tr key={idx} className="border-t border-gray-50 hover:bg-gray-50">
-                  <td className="py-1 px-2">
+          {supplierGroups.map((sg) => {
+            const isExpanded = expandedSuppliers.has(sg.name);
+            const isFC = !sg.name.startsWith('CC:');
+            return (
+              <div key={sg.name} className="border-t border-gray-100">
+                {/* Supplier subtotal row */}
+                <button
+                  onClick={() => toggleSupplier(sg.name)}
+                  className="w-full px-2 py-1.5 flex items-center justify-between hover:bg-gray-50 transition-colors text-xs"
+                >
+                  <div className="flex items-center space-x-2">
+                    {isExpanded ? <ChevronDown className="w-3 h-3 text-gray-300" /> : <ChevronRight className="w-3 h-3 text-gray-300" />}
                     <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${
-                      item.source === 'FC' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'
+                      isFC ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'
                     }`}>
-                      {item.source}
+                      {isFC ? 'FC' : 'CC'}
                     </span>
-                  </td>
-                  <td className="py-1 px-2 font-mono text-gray-600">{item.document_name}</td>
-                  <td className="py-1 px-2 text-gray-500">{item.date}</td>
-                  <td className="py-1 px-2 text-gray-600 truncate max-w-xs">
-                    {item.supplier_name || item.description}
-                  </td>
-                  <td className="py-1 px-2 text-right font-medium text-gray-800">{formatCurrency(item.value)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                    <span className="font-semibold text-gray-700">{sg.name}</span>
+                    <span className="text-gray-400">({sg.items.length})</span>
+                    {sg.totalIva > 0 && (
+                      <span className="text-[10px] px-1 py-0.5 rounded bg-green-50 text-green-600">
+                        IVA: {formatCurrency(sg.totalIva)}
+                      </span>
+                    )}
+                  </div>
+                  <span className="font-semibold text-gray-800 w-32 text-right">{formatCurrency(sg.total)}</span>
+                </button>
+                {/* Individual items */}
+                {isExpanded && (
+                  <div className="pl-6">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="text-gray-400 uppercase">
+                          <th className="text-left py-1 px-2 font-medium">Documento</th>
+                          <th className="text-left py-1 px-2 font-medium">Fecha</th>
+                          <th className="text-left py-1 px-2 font-medium">Cuenta</th>
+                          <th className="text-left py-1 px-2 font-medium">Descripcion</th>
+                          <th className="text-right py-1 px-2 font-medium">Base</th>
+                          <th className="text-right py-1 px-2 font-medium">IVA</th>
+                          <th className="text-right py-1 px-2 font-medium">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sg.items.map((item, idx) => (
+                          <tr key={idx} className="border-t border-gray-50 hover:bg-gray-50">
+                            <td className="py-1 px-2 font-mono text-gray-600">{item.document_name}</td>
+                            <td className="py-1 px-2 text-gray-500">{item.date}</td>
+                            <td className="py-1 px-2 font-mono text-gray-400">{item.account_code}</td>
+                            <td className="py-1 px-2 text-gray-600 truncate max-w-[200px]" title={item.description}>
+                              {item.description || '-'}
+                            </td>
+                            <td className="py-1 px-2 text-right text-gray-600">
+                              {formatCurrency(item.value_with_tax - item.tax_value)}
+                            </td>
+                            <td className={`py-1 px-2 text-right ${item.tax_value > 0 ? 'text-green-600 font-medium' : 'text-gray-300'}`}>
+                              {item.tax_value > 0 ? formatCurrency(item.tax_value) : '-'}
+                            </td>
+                            <td className="py-1 px-2 text-right font-medium text-gray-800">
+                              {formatCurrency(item.value)}
+                            </td>
+                          </tr>
+                        ))}
+                        {/* Subtotal row */}
+                        <tr className="border-t-2 border-gray-200 bg-gray-50 font-semibold">
+                          <td colSpan={4} className="py-1.5 px-2 text-gray-600">Subtotal {sg.name}</td>
+                          <td className="py-1.5 px-2 text-right text-gray-700">{formatCurrency(sg.totalBase)}</td>
+                          <td className={`py-1.5 px-2 text-right ${sg.totalIva > 0 ? 'text-green-700' : 'text-gray-300'}`}>
+                            {sg.totalIva > 0 ? formatCurrency(sg.totalIva) : '-'}
+                          </td>
+                          <td className="py-1.5 px-2 text-right text-gray-800">{formatCurrency(sg.total)}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
