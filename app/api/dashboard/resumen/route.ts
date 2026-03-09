@@ -411,9 +411,15 @@ export async function GET(request: NextRequest) {
       });
     });
 
-    // Use ONLY journals (2408) as IVA descontable — purchases likely duplicate
-    // We report both separately so the user can audit
-    const ivaDescByMonth = ivaDescJournalsByMonth;
+    // Combine BOTH sources: journals 2408 (CC/comprobantes) + purchase_items tax (FC/facturas de compra)
+    // These are NOT duplicates — they come from different Siigo document types
+    const ivaDescByMonth = new Map<string, number>();
+    ivaDescJournalsByMonth.forEach((val, month) => {
+      ivaDescByMonth.set(month, (ivaDescByMonth.get(month) || 0) + val);
+    });
+    ivaDescPurchasesByMonth.forEach((val, month) => {
+      ivaDescByMonth.set(month, (ivaDescByMonth.get(month) || 0) + val);
+    });
 
     // --- Collect all months ---
     const allMonths = new Set<string>();

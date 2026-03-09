@@ -685,24 +685,12 @@ export default function ResumenPage() {
               </p>
             </div>
             <div className="bg-blue-50 rounded-xl border border-blue-200 p-4">
-              <p className="text-xs text-blue-600 mb-1">IVA Descontable (2408 Journals)</p>
+              <p className="text-xs text-blue-600 mb-1">IVA Descontable</p>
               <p className="text-lg font-bold text-blue-900">
-                {formatCurrency(t.iva_descontable_journals)}
+                {formatCurrency(t.iva_descontable)}
               </p>
               <p className="text-xs text-blue-400">
-                Fuente: Cuenta 2408 Debito (CC)
-              </p>
-            </div>
-            <div className="bg-orange-50 rounded-xl border border-orange-200 p-4">
-              <p className="text-xs text-orange-600 mb-1">IVA Facturas Compra (FC)</p>
-              <p className="text-lg font-bold text-orange-900">
-                {formatCurrency(t.iva_descontable_purchases)}
-              </p>
-              <p className={`text-xs ${Math.abs(t.iva_descontable_journals - t.iva_descontable_purchases) < 1000 ? 'text-red-500 font-semibold' : 'text-orange-400'}`}>
-                {Math.abs(t.iva_descontable_journals - t.iva_descontable_purchases) < 1000
-                  ? 'Similar a 2408 — posible doble conteo'
-                  : `Diferencia vs 2408: ${formatCurrency(Math.abs(t.iva_descontable_journals - t.iva_descontable_purchases))}`
-                }
+                CC: {formatCurrency(t.iva_descontable_journals)} + FC: {formatCurrency(t.iva_descontable_purchases)}
               </p>
             </div>
             <div className={`rounded-xl border p-4 ${t.iva_neto >= 0 ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'}`}>
@@ -713,7 +701,7 @@ export default function ResumenPage() {
                 {formatCurrency(t.iva_neto)}
               </p>
               <p className={`text-xs ${t.iva_neto >= 0 ? 'text-red-500' : 'text-green-500'}`}>
-                Generado - Descontable(2408) - NC
+                Generado - Descontable - NC
               </p>
             </div>
           </div>
@@ -1088,12 +1076,12 @@ export default function ResumenPage() {
                     </td>
                   </tr>
 
-                  {/* IVA Descontable (2408 Journals) */}
+                  {/* IVA Descontable (CC + FC) */}
                   <tr className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer" onClick={() => toggleRow('iva_desc')}>
                     <td className="px-4 py-2 text-gray-600 sticky left-0 bg-white">
                       <span className="inline-flex items-center gap-1">
                         {expandedRows.has('iva_desc') ? <ChevronDown className="w-3 h-3 text-gray-400" /> : <ChevronRight className="w-3 h-3 text-gray-400" />}
-                        (-) IVA Descontable (2408)
+                        (-) IVA Descontable
                       </span>
                     </td>
                     {filteredMonths.map((m) => (
@@ -1314,7 +1302,7 @@ export default function ResumenPage() {
                 </div>
                 <div>
                   <p className="font-semibold text-gray-800">IVA</p>
-                  <p><strong>Generado:</strong> IVA cobrado en facturas de venta. <strong>Descontable:</strong> IVA pagado en compras (cuenta PUC 2408, debito). <strong>Neto:</strong> Lo que se debe pagar a la DIAN.</p>
+                  <p><strong>Generado:</strong> IVA cobrado en facturas de venta. <strong>Descontable:</strong> IVA pagado en compras (CC: cuenta 2408 + FC: facturas de compra). <strong>Neto:</strong> Lo que se debe pagar a la DIAN.</p>
                 </div>
                 <div>
                   <p className="font-semibold text-gray-800">Renta Estimada</p>
