@@ -47,6 +47,7 @@ interface Summary {
   cost_real: { count: number; units: number; cost_value: number; sale_value: number; avg_margin: number; label: string };
   cost_suspicious: { count: number; units: number; cost_value: number; sale_value: number; label: string };
   cost_none: { count: number; units: number; sale_value: number; label: string };
+  cost_sources?: { fc_directa: number; cogs_6135: number; sin_costo: number };
   suppliers_count: number;
 }
 
@@ -201,9 +202,14 @@ export default function InventarioPage() {
       {/* Cost methodology note */}
       <div className="bg-blue-50 rounded-xl border border-blue-200 p-4 mb-6 text-xs text-blue-700">
         <p className="font-semibold mb-1">Metodología de costo</p>
-        <p><strong>Costo Real:</strong> Promedio del costo unitario registrado en Siigo (cuenta PUC 6135, costo de ventas) cada vez que se vendió ese producto. Margen entre 0% y 60%.</p>
-        <p><strong>Costo Sospechoso:</strong> Mismo origen (COGS 6135) pero el margen es menor a -20%. Probablemente el costo es por SET/caja y el precio es por unidad.</p>
-        <p><strong>Sin Costo:</strong> El producto nunca se ha vendido o no tiene código asignado en los journals de costo. No hay dato de costo disponible.</p>
+        <p><strong>Costo Real:</strong> Se busca primero en facturas de compra (FC directa) donde el código del producto aparece como cuenta contable (método contadora anterior, pre-Ago 2025). Si no hay FC, se usa el promedio COGS 6135 (costo registrado al vender). Margen razonable (&gt; -20%).</p>
+        <p><strong>Costo Sospechoso:</strong> Mismo origen (FC o COGS) pero el margen es menor a -20%. Probablemente el costo es por SET/caja y el precio es por unidad.</p>
+        <p><strong>Sin Costo:</strong> No hay factura de compra ni registro COGS para este SKU. No hay dato de costo disponible.</p>
+        {s.cost_sources && (
+          <p className="mt-1 text-blue-500">
+            Fuentes: {s.cost_sources.fc_directa} productos con FC directa, {s.cost_sources.cogs_6135} con COGS 6135, {s.cost_sources.sin_costo} sin costo.
+          </p>
+        )}
       </div>
 
       {/* Filter tabs */}
@@ -329,7 +335,7 @@ export default function InventarioPage() {
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden mb-8">
         <div className="bg-gray-50 border-b border-gray-200 px-4 py-3">
           <h2 className="text-sm font-semibold text-gray-700">Movimiento Mensual — Inventario Propio</h2>
-          <p className="text-xs text-gray-400 mt-0.5">Compras: facturas con cuenta 6135/1435. Ventas: facturas de venta por código de producto propio.</p>
+          <p className="text-xs text-gray-400 mt-0.5">Compras: facturas con cuenta 6135/1435 + facturas históricas con código de producto como cuenta. Ventas: facturas de venta por código de producto propio.</p>
         </div>
 
         <div className="overflow-x-auto">

@@ -111,11 +111,10 @@ export async function GET() {
     });
     const validInvoiceIds = new Set(invoices.map((inv) => inv.id as string));
 
-    // 6. Purchase items with inventory accounts (6135/1435) for purchase movement
-    const purchaseItems = await fetchAllRows(
+    // 6. ALL purchase items (to capture both modern 6135/1435 AND historical product-code accounts)
+    const allPurchaseItems = await fetchAllRows(
       'purchase_items',
-      'purchase_id, price, quantity, tax_value',
-      (q) => q.or('account_code.like.6135%,account_code.like.1435%')
+      'purchase_id, account_code, price, quantity, tax_value'
     );
 
     // 7. Purchases for date mapping
@@ -123,6 +122,45 @@ export async function GET() {
     const purchaseDateMap = new Map<string, string>();
     purchases.forEach((p) => {
       purchaseDateMap.set(p.id as string, (p.date as string) || '');
+    });
+
+    // === Classify purchase items: PUC inventory accounts vs product-code accounts ===
+    // Known PUC prefixes (Colombian chart of accounts): 1xxx-9xxx are standard
+    // The previous accountant used product codes (e.g. SILL, OCT-, MESA) as account_code
+    // Valid PUC: starts with digit. Non-PUC: starts with letter = product code = inventory purchase
+    const KNOWN_PUC_PREFIXES = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
+
+    function isInventoryPurchaseItem(accountCode: string): boolean {
+      if (!accountCode) return false;
+      // Modern method: 6135 (COGS) or 1435 (merchandise inventory)
+      if (accountCode.startsWith('6135') || accountCode.startsWith('1435')) return true;
+      // Historical method: account_code is a product code (starts with letter, not a PUC number)
+      if (!KNOWN_PUC_PREFIXES.includes(accountCode[0])) return true;
+      return false;
+    }
+
+    function isProductCodeAccount(accountCode: string): boolean {
+      if (!accountCode) return false;
+      return !KNOWN_PUC_PREFIXES.includes(accountCode[0]);
+    }
+
+    const inventoryPurchaseItems = allPurchaseItems.filter((pi) =>
+      isInventoryPurchaseItem((pi.account_code as string) || '')
+    );
+
+    // === Build cost from historical FC (product code as account_code) ===
+    // These give us direct purchase cost per product code
+    const fcCostByCode = new Map<string, { total: number; qty: number; count: number }>();
+    allPurchaseItems.forEach((pi) => {
+      const acctCode = (pi.account_code as string) || '';
+      if (!isProductCodeAccount(acctCode)) return;
+      const price = Number(pi.price) || 0;
+      const qty = Number(pi.quantity) || 1;
+      if (!fcCostByCode.has(acctCode)) fcCostByCode.set(acctCode, { total: 0, qty: 0, count: 0 });
+      const entry = fcCostByCode.get(acctCode)!;
+      entry.total += price * qty;
+      entry.qty += qty;
+      entry.count += 1;
     });
 
     // === Build COGS cost per product code ===
@@ -138,29 +176,49 @@ export async function GET() {
     });
 
     // === Build product inventory list ===
+    // Cost priority: (1) FC directa (product code in purchase_items) → (2) COGS 6135 → (3) sin costo
     const productList: ProductInventory[] = (products as Record<string, unknown>[]).map((p) => {
       const code = (p.code as string) || '';
       const qty = Number(p.available_quantity) || 0;
       const salePrice = Number(p.sale_price_no_iva) || Number(p.sale_price) || 0;
       const saleValue = qty * salePrice;
-      const cogs = cogsByCode.get(code);
-      const costUnit = cogs && cogs.count > 0 ? cogs.total / cogs.count : null;
-      const costValue = costUnit !== null ? costUnit * qty : null;
 
+      // Source 1: Direct FC match (historical purchase items with product code as account_code)
+      const fc = fcCostByCode.get(code);
+      // Source 2: COGS 6135 journal entries
+      const cogs = cogsByCode.get(code);
+
+      let costUnit: number | null = null;
+      let costSource = 'Sin datos de costo';
       let costCategory: CostCategory = 'sin_costo';
       let marginPct: number | null = null;
-      let costSource = 'Sin datos de costo';
+      let cogsEntries = cogs?.count || 0;
 
-      if (costUnit !== null) {
+      if (fc && fc.qty > 0) {
+        // Priority 1: Direct purchase cost from FC
+        costUnit = fc.total / fc.qty;
         marginPct = salePrice > 0 ? (1 - costUnit / salePrice) : null;
         if (marginPct !== null && marginPct < MARGIN_SUSPICIOUS_THRESHOLD) {
           costCategory = 'sospechoso';
-          costSource = `COGS 6135 (${cogs!.count} ventas) — margen ${Math.round(marginPct * 100)}% sospechoso`;
+          costSource = `FC directa (${fc.count} compras, ${fc.qty} uds) — margen ${Math.round(marginPct * 100)}% sospechoso`;
         } else {
           costCategory = 'real';
-          costSource = `COGS 6135 (${cogs!.count} ventas)`;
+          costSource = `FC directa (${fc.count} compras, ${fc.qty} uds)`;
+        }
+      } else if (cogs && cogs.count > 0) {
+        // Priority 2: COGS 6135 average cost
+        costUnit = cogs.total / cogs.count;
+        marginPct = salePrice > 0 ? (1 - costUnit / salePrice) : null;
+        if (marginPct !== null && marginPct < MARGIN_SUSPICIOUS_THRESHOLD) {
+          costCategory = 'sospechoso';
+          costSource = `COGS 6135 (${cogs.count} ventas) — margen ${Math.round(marginPct * 100)}% sospechoso`;
+        } else {
+          costCategory = 'real';
+          costSource = `COGS 6135 (${cogs.count} ventas)`;
         }
       }
+
+      const costValue = costUnit !== null ? costUnit * qty : null;
 
       return {
         code,
@@ -174,7 +232,7 @@ export async function GET() {
         cost_category: costCategory,
         cost_source: costSource,
         margin_pct: marginPct !== null ? Math.round(marginPct * 100) : null,
-        cogs_entries: cogs?.count || 0,
+        cogs_entries: cogsEntries,
       };
     });
 
@@ -231,9 +289,9 @@ export async function GET() {
       }
     });
 
-    // Purchases by month (inventory accounts 6135/1435)
+    // Purchases by month (all inventory items: 6135/1435 + historical product-code accounts)
     const purchasesByMonth = new Map<string, { value: number; count: number }>();
-    purchaseItems.forEach((pi) => {
+    inventoryPurchaseItems.forEach((pi) => {
       const pid = pi.purchase_id as string;
       const date = purchaseDateMap.get(pid);
       if (!date) return;
@@ -273,6 +331,10 @@ export async function GET() {
     const suspicious = productList.filter((p) => p.cost_category === 'sospechoso');
     const noCost = productList.filter((p) => p.cost_category === 'sin_costo');
 
+    // Count cost sources
+    const fromFC = productList.filter((p) => p.cost_source.startsWith('FC directa'));
+    const fromCOGS = productList.filter((p) => p.cost_source.startsWith('COGS 6135'));
+
     const summary = {
       total_products: productList.length,
       total_units: productList.reduce((s, p) => s + p.qty, 0),
@@ -285,20 +347,25 @@ export async function GET() {
         avg_margin: realCost.length > 0
           ? Math.round(realCost.reduce((s, p) => s + (p.margin_pct || 0), 0) / realCost.length)
           : 0,
-        label: 'Costo real (COGS 6135, margen razonable)',
+        label: 'Costo real (FC directa o COGS 6135, margen razonable)',
       },
       cost_suspicious: {
         count: suspicious.length,
         units: suspicious.reduce((s, p) => s + p.qty, 0),
         cost_value: suspicious.reduce((s, p) => s + (p.cost_value || 0), 0),
         sale_value: suspicious.reduce((s, p) => s + p.sale_value, 0),
-        label: 'Costo sospechoso (COGS 6135, margen < -20%)',
+        label: 'Costo sospechoso (margen < -20%)',
       },
       cost_none: {
         count: noCost.length,
         units: noCost.reduce((s, p) => s + p.qty, 0),
         sale_value: noCost.reduce((s, p) => s + p.sale_value, 0),
-        label: 'Sin costo (no hay COGS para este SKU)',
+        label: 'Sin costo (no hay FC ni COGS para este SKU)',
+      },
+      cost_sources: {
+        fc_directa: fromFC.length,
+        cogs_6135: fromCOGS.length,
+        sin_costo: noCost.length,
       },
       suppliers_count: suppliers.length,
     };
