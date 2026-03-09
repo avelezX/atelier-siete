@@ -30,8 +30,6 @@ interface MonthData {
   iva_generado: number;
   iva_nc: number;
   iva_descontable: number;
-  iva_descontable_journals: number;
-  iva_descontable_purchases: number;
   iva_neto: number;
   renta_estimada: number;
   invoices_count: number;
@@ -61,12 +59,7 @@ interface IvaDetail {
   generado: IvaDetailItem[];
   nc: IvaDetailItem[];
   descontable_by_supplier: IvaSupplierGroup[];
-  warning_double_count: {
-    total_journals_2408: number;
-    total_purchases_tax: number;
-    using: string;
-    note: string;
-  };
+  source_note: string;
 }
 
 interface ExpenseItem {
@@ -507,8 +500,6 @@ export default function ResumenPage() {
           iva_generado: acc.iva_generado + m.iva_generado,
           iva_nc: acc.iva_nc + m.iva_nc,
           iva_descontable: acc.iva_descontable + m.iva_descontable,
-          iva_descontable_journals: acc.iva_descontable_journals + m.iva_descontable_journals,
-          iva_descontable_purchases: acc.iva_descontable_purchases + m.iva_descontable_purchases,
           iva_neto: acc.iva_neto + m.iva_neto,
           renta_estimada: acc.renta_estimada + m.renta_estimada,
           invoices_count: acc.invoices_count + m.invoices_count,
@@ -519,9 +510,7 @@ export default function ResumenPage() {
           costo_ventas: 0, utilidad_bruta: 0, margen_bruto_pct: 0,
           gastos_admin: 0, gastos_venta: 0, gastos_financieros: 0,
           total_gastos: 0, utilidad_operativa: 0, iva_generado: 0,
-          iva_nc: 0, iva_descontable: 0,
-          iva_descontable_journals: 0, iva_descontable_purchases: 0,
-          iva_neto: 0,
+          iva_nc: 0, iva_descontable: 0, iva_neto: 0,
           renta_estimada: 0, invoices_count: 0, cn_count: 0,
         }
       )
@@ -690,7 +679,7 @@ export default function ResumenPage() {
                 {formatCurrency(t.iva_descontable)}
               </p>
               <p className="text-xs text-blue-400">
-                CC: {formatCurrency(t.iva_descontable_journals)} + FC: {formatCurrency(t.iva_descontable_purchases)}
+                Fuente: Facturas de compra (FC)
               </p>
             </div>
             <div className={`rounded-xl border p-4 ${t.iva_neto >= 0 ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'}`}>
@@ -706,64 +695,33 @@ export default function ResumenPage() {
             </div>
           </div>
 
-          {/* IVA Double-count warning */}
-          {data.iva_detail && (
-            <div className="bg-yellow-50 rounded-xl border border-yellow-200 p-4 mb-6">
-              <p className="text-sm font-semibold text-yellow-800 mb-2">Diagnóstico IVA Descontable</p>
-              <div className="grid grid-cols-3 gap-4 text-sm">
-                <div>
-                  <p className="text-yellow-600 text-xs">Journals 2408 (CC)</p>
-                  <p className="font-bold text-yellow-900">{formatCurrency(data.iva_detail.warning_double_count.total_journals_2408)}</p>
-                </div>
-                <div>
-                  <p className="text-yellow-600 text-xs">Facturas Compra (FC)</p>
-                  <p className="font-bold text-yellow-900">{formatCurrency(data.iva_detail.warning_double_count.total_purchases_tax)}</p>
-                </div>
-                <div>
-                  <p className="text-yellow-600 text-xs">Usando para cálculo</p>
-                  <p className="font-bold text-yellow-900">Solo Journals 2408</p>
-                </div>
+          {/* IVA Descontable detail by supplier */}
+          {data.iva_detail && data.iva_detail.descontable_by_supplier.length > 0 && (
+            <details className="mb-6">
+              <summary className="text-xs font-semibold text-blue-700 cursor-pointer hover:text-blue-900">
+                Ver detalle IVA Descontable por proveedor ({data.iva_detail.descontable_by_supplier.length} proveedores)
+              </summary>
+              <div className="mt-2 bg-blue-50 rounded-xl border border-blue-200 p-4 max-h-80 overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-blue-600 uppercase border-b border-blue-200">
+                      <th className="text-left py-1 px-2">Proveedor / Documento</th>
+                      <th className="text-right py-1 px-2">Facturas</th>
+                      <th className="text-right py-1 px-2">IVA Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.iva_detail.descontable_by_supplier.map((sg, idx) => (
+                      <tr key={idx} className="border-t border-blue-100 hover:bg-blue-100/50">
+                        <td className="py-1 px-2 text-blue-900">{sg.name}</td>
+                        <td className="py-1 px-2 text-right text-blue-600">{sg.count}</td>
+                        <td className="py-1 px-2 text-right font-semibold text-blue-900">{formatCurrency(sg.total)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-              <p className="text-xs text-yellow-600 mt-2">
-                Art. 483-488 ET: IVA descontable = IVA pagado en compras de mercancía + gastos operativos gravados.
-                Se usa la cuenta contable 2408 (comprobantes) como fuente única para evitar doble conteo con facturas de compra.
-              </p>
-              {data.iva_detail.descontable_by_supplier.length > 0 && (
-                <details className="mt-3">
-                  <summary className="text-xs font-semibold text-yellow-800 cursor-pointer hover:text-yellow-900">
-                    Ver detalle IVA Descontable por proveedor/documento ({data.iva_detail.descontable_by_supplier.length} fuentes)
-                  </summary>
-                  <div className="mt-2 max-h-80 overflow-y-auto">
-                    <table className="w-full text-xs">
-                      <thead>
-                        <tr className="text-yellow-600 uppercase border-b border-yellow-200">
-                          <th className="text-left py-1 px-2">Fuente</th>
-                          <th className="text-left py-1 px-2">Proveedor / Documento</th>
-                          <th className="text-right py-1 px-2">Items</th>
-                          <th className="text-right py-1 px-2">IVA Total</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {data.iva_detail.descontable_by_supplier.map((sg, idx) => (
-                          <tr key={idx} className="border-t border-yellow-100 hover:bg-yellow-100/50">
-                            <td className="py-1 px-2">
-                              <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${
-                                sg.source === 'FC' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'
-                              }`}>
-                                {sg.source}
-                              </span>
-                            </td>
-                            <td className="py-1 px-2 text-yellow-900">{sg.name}</td>
-                            <td className="py-1 px-2 text-right text-yellow-600">{sg.count}</td>
-                            <td className="py-1 px-2 text-right font-semibold text-yellow-900">{formatCurrency(sg.total)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </details>
-              )}
-            </div>
+            </details>
           )}
 
           {/* Renta card */}
@@ -1076,13 +1034,10 @@ export default function ResumenPage() {
                     </td>
                   </tr>
 
-                  {/* IVA Descontable (CC + FC) */}
-                  <tr className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer" onClick={() => toggleRow('iva_desc')}>
+                  {/* IVA Descontable */}
+                  <tr className="border-b border-gray-100 hover:bg-gray-50">
                     <td className="px-4 py-2 text-gray-600 sticky left-0 bg-white">
-                      <span className="inline-flex items-center gap-1">
-                        {expandedRows.has('iva_desc') ? <ChevronDown className="w-3 h-3 text-gray-400" /> : <ChevronRight className="w-3 h-3 text-gray-400" />}
-                        (-) IVA Descontable
-                      </span>
+                      (-) IVA Descontable
                     </td>
                     {filteredMonths.map((m) => (
                       <td key={m.month} className="px-3 py-2 text-right text-blue-600">
@@ -1093,36 +1048,6 @@ export default function ResumenPage() {
                       {formatCurrency(t.iva_descontable)}
                     </td>
                   </tr>
-                  {expandedRows.has('iva_desc') && (
-                    <>
-                      <tr className="border-b border-gray-50 bg-blue-50/20">
-                        <td className="pl-9 pr-4 py-1.5 text-xs text-blue-500 sticky left-0 bg-blue-50/20">
-                          Journals 2408 (CC)
-                        </td>
-                        {filteredMonths.map((m) => (
-                          <td key={m.month} className="px-3 py-1.5 text-right text-xs text-blue-400">
-                            {formatCurrency(m.iva_descontable_journals)}
-                          </td>
-                        ))}
-                        <td className="px-4 py-1.5 text-right text-xs font-medium text-blue-500 bg-gray-50/50">
-                          {formatCurrency(t.iva_descontable_journals)}
-                        </td>
-                      </tr>
-                      <tr className="border-b border-gray-50 bg-orange-50/20">
-                        <td className="pl-9 pr-4 py-1.5 text-xs text-orange-500 sticky left-0 bg-orange-50/20">
-                          Fact. Compra (FC) — ref
-                        </td>
-                        {filteredMonths.map((m) => (
-                          <td key={m.month} className="px-3 py-1.5 text-right text-xs text-orange-400">
-                            {formatCurrency(m.iva_descontable_purchases)}
-                          </td>
-                        ))}
-                        <td className="px-4 py-1.5 text-right text-xs font-medium text-orange-500 bg-gray-50/50">
-                          {formatCurrency(t.iva_descontable_purchases)}
-                        </td>
-                      </tr>
-                    </>
-                  )}
 
                   {/* IVA NC */}
                   <tr className="border-b border-gray-100 hover:bg-gray-50">
