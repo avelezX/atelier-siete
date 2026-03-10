@@ -31,19 +31,43 @@ export async function GET(req: NextRequest) {
     const sheet = workbook.Sheets[sheetName];
     const allRows: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
 
-    // 4. Find the header row (contains "Código" or "Cuenta" or starts with column names)
-    // Then data rows follow
+    // 4. Find the header row and detect column layout
+    // Siigo Balance de Prueba columns:
+    //   Nivel | Transaccional | Código cuenta contable | Nombre Cuenta contable | Saldo Inicial | Mov Débito | Mov Crédito | Saldo final
     let headerRowIdx = -1;
+    let codeColIdx = 0;    // column index for the PUC code
+    let nameColIdx = 1;    // column index for account name
+    let numsStartIdx = 2;  // column index where numeric columns start
+
     const rawDebug: string[] = [];
     for (let i = 0; i < Math.min(allRows.length, 10); i++) {
       const rowStr = (allRows[i] || []).map(c => String(c || '')).join(' | ');
-      rawDebug.push(`Row ${i}: ${rowStr.substring(0, 200)}`);
+      rawDebug.push(`Row ${i}: ${rowStr.substring(0, 300)}`);
       const row = allRows[i] || [];
-      const firstCell = String(row[0] || '').toLowerCase();
-      const secondCell = String(row[1] || '').toLowerCase();
-      if (firstCell.includes('código') || firstCell.includes('codigo') ||
-          secondCell.includes('cuenta') || firstCell === 'code') {
-        headerRowIdx = i;
+
+      // Scan each cell for the code column header
+      for (let col = 0; col < row.length; col++) {
+        const cell = String(row[col] || '').toLowerCase();
+        if (cell.includes('código cuenta') || cell.includes('codigo cuenta') || cell === 'código' || cell === 'codigo') {
+          headerRowIdx = i;
+          codeColIdx = col;
+          // Name column is typically the next one
+          nameColIdx = col + 1;
+          // Numeric columns start after the name column
+          numsStartIdx = col + 2;
+          break;
+        }
+      }
+
+      // Fallback: check for "Nivel" in first cell (Siigo format)
+      if (headerRowIdx < 0) {
+        const firstCell = String(row[0] || '').toLowerCase();
+        if (firstCell === 'nivel') {
+          headerRowIdx = i;
+          codeColIdx = 2;   // Siigo puts code in column C
+          nameColIdx = 3;   // Name in column D
+          numsStartIdx = 4; // Numbers start at column E
+        }
       }
     }
 
@@ -56,12 +80,10 @@ export async function GET(req: NextRequest) {
     interface BalanceRow {
       code: string;
       account_name: string;
-      prev_debit: number;
-      prev_credit: number;
+      initial_balance: number;
       mov_debit: number;
       mov_credit: number;
-      new_debit: number;
-      new_credit: number;
+      final_balance: number;
     }
 
     const accounts: BalanceRow[] = [];
@@ -69,84 +91,60 @@ export async function GET(req: NextRequest) {
 
     for (let i = startRow; i < allRows.length; i++) {
       const row = allRows[i] || [];
-      const code = String(row[0] || '').trim();
-      // Valid PUC codes: 1-9 digits, typically 1-8 digits
+      const code = String(row[codeColIdx] || '').trim();
+      // Valid PUC codes: 1-8 digits
       if (!code || !/^\d{1,8}$/.test(code)) continue;
 
-      const name = String(row[1] || '').trim();
-      const nums = row.slice(2).map((v) => {
+      const name = String(row[nameColIdx] || '').trim();
+      const nums = row.slice(numsStartIdx).map((v) => {
         const n = Number(v);
         return isNaN(n) ? 0 : n;
       });
 
+      // Siigo format: Saldo Inicial | Mov Débito | Mov Crédito | Saldo Final
       accounts.push({
         code,
         account_name: name,
-        prev_debit: nums[0] || 0,
-        prev_credit: nums[1] || 0,
-        mov_debit: nums[2] || 0,
-        mov_credit: nums[3] || 0,
-        new_debit: nums[4] || 0,
-        new_credit: nums[5] || 0,
+        initial_balance: nums[0] || 0,
+        mov_debit: nums[1] || 0,
+        mov_credit: nums[2] || 0,
+        final_balance: nums[3] || 0,
       });
     }
 
-    // 6. Group by major PUC categories for quick comparison
-    const categories: Record<string, { mov_debit: number; mov_credit: number; new_balance: number; accounts: number }> = {};
-
+    // 6. Group by major PUC categories
     const categoryNames: Record<string, string> = {
-      '1': 'Activos',
-      '2': 'Pasivos',
-      '3': 'Patrimonio',
-      '4': 'Ingresos',
-      '5': 'Gastos',
-      '6': 'Costo de Ventas',
-      '7': 'Costos de Producción',
-      '41': 'Ingresos Operacionales',
-      '42': 'Ingresos No Operacionales',
-      '51': 'Gastos Admin',
-      '52': 'Gastos de Venta',
-      '53': 'Gastos No Operacionales',
-      '5305': 'Gastos Financieros',
-      '6135': 'Costo de Ventas Comercio',
+      '1': 'Activos', '2': 'Pasivos', '3': 'Patrimonio',
+      '4': 'Ingresos', '5': 'Gastos', '6': 'Costo de Ventas',
+      '41': 'Ingresos Operacionales', '42': 'Ingresos No Operacionales',
+      '51': 'Gastos Admin', '52': 'Gastos de Venta', '53': 'Gastos No Operacionales',
+      '5305': 'Gastos Financieros', '6135': 'Costo de Ventas Comercio',
     };
 
-    // Subcategory totals for comparison with resumen
+    const categories: Record<string, { mov_debit: number; mov_credit: number; final_balance: number; accounts: number }> = {};
     const subcategories: Record<string, { name: string; mov_debit: number; mov_credit: number; count: number }> = {};
 
     for (const acc of accounts) {
-      // Only process leaf-level accounts (usually 6+ digits)
-      // But also allow 4-digit for summary
       const prefix4 = acc.code.substring(0, 4);
       const prefix2 = acc.code.substring(0, 2);
-      const prefix1 = acc.code.substring(0, 1);
 
-      // 4-digit subcategory
-      if (acc.code.length >= 4) {
-        if (!subcategories[prefix4]) {
-          subcategories[prefix4] = {
-            name: categoryNames[prefix4] || acc.account_name,
-            mov_debit: 0,
-            mov_credit: 0,
-            count: 0,
-          };
-        }
-        // Only add leaf accounts (longest codes) to avoid double counting
-        if (acc.code.length >= 6) {
-          subcategories[prefix4].mov_debit += acc.mov_debit;
-          subcategories[prefix4].mov_credit += acc.mov_credit;
-          subcategories[prefix4].count++;
-        }
-      }
-
-      // 2-digit category
-      if (!categories[prefix2]) {
-        categories[prefix2] = { mov_debit: 0, mov_credit: 0, new_balance: 0, accounts: 0 };
-      }
+      // Only count leaf accounts (6+ digits) to avoid double counting
       if (acc.code.length >= 6) {
+        // 4-digit subcategory
+        if (!subcategories[prefix4]) {
+          subcategories[prefix4] = { name: categoryNames[prefix4] || acc.account_name, mov_debit: 0, mov_credit: 0, count: 0 };
+        }
+        subcategories[prefix4].mov_debit += acc.mov_debit;
+        subcategories[prefix4].mov_credit += acc.mov_credit;
+        subcategories[prefix4].count++;
+
+        // 2-digit category
+        if (!categories[prefix2]) {
+          categories[prefix2] = { mov_debit: 0, mov_credit: 0, final_balance: 0, accounts: 0 };
+        }
         categories[prefix2].mov_debit += acc.mov_debit;
         categories[prefix2].mov_credit += acc.mov_credit;
-        categories[prefix2].new_balance += acc.new_debit - acc.new_credit;
+        categories[prefix2].final_balance += acc.final_balance;
         categories[prefix2].accounts++;
       }
     }
@@ -162,15 +160,12 @@ export async function GET(req: NextRequest) {
         total_rows: allRows.length,
         parsed_accounts: accounts.length,
         header_row_idx: headerRowIdx,
+        code_col: codeColIdx,
         raw_first_rows: rawDebug,
       },
       categories: Object.entries(categories)
         .sort(([a], [b]) => a.localeCompare(b))
-        .map(([code, data]) => ({
-          code,
-          name: categoryNames[code] || code,
-          ...data,
-        })),
+        .map(([code, data]) => ({ code, name: categoryNames[code] || code, ...data })),
       subcategories_5x: Object.entries(subcategories)
         .filter(([code]) => code.startsWith('5') || code.startsWith('6'))
         .sort(([a], [b]) => a.localeCompare(b))

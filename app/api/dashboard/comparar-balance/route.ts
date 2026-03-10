@@ -31,12 +31,10 @@ async function fetchAllRows(
 interface BalanceAccount {
   code: string;
   account_name: string;
-  prev_debit: number;
-  prev_credit: number;
+  initial_balance: number;
   mov_debit: number;
   mov_credit: number;
-  new_debit: number;
-  new_credit: number;
+  final_balance: number;
 }
 
 async function parseBalanceExcel(fileUrl: string): Promise<BalanceAccount[]> {
@@ -48,16 +46,40 @@ async function parseBalanceExcel(fileUrl: string): Promise<BalanceAccount[]> {
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   const allRows: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
 
-  // Find header row
+  // Find header row and detect column layout
+  // Siigo format: Nivel | Transaccional | Código cuenta contable | Nombre | Saldo Inicial | Mov Débito | Mov Crédito | Saldo Final
   let headerRowIdx = -1;
+  let codeColIdx = 0;
+  let nameColIdx = 1;
+  let numsStartIdx = 2;
+
   for (let i = 0; i < Math.min(allRows.length, 10); i++) {
     const row = allRows[i] || [];
-    const firstCell = String(row[0] || '').toLowerCase();
-    const secondCell = String(row[1] || '').toLowerCase();
-    if (firstCell.includes('código') || firstCell.includes('codigo') ||
-        secondCell.includes('cuenta') || firstCell === 'code') {
-      headerRowIdx = i;
+
+    // Scan each cell for the code column header
+    for (let col = 0; col < row.length; col++) {
+      const cell = String(row[col] || '').toLowerCase();
+      if (cell.includes('código cuenta') || cell.includes('codigo cuenta') || cell === 'código' || cell === 'codigo') {
+        headerRowIdx = i;
+        codeColIdx = col;
+        nameColIdx = col + 1;
+        numsStartIdx = col + 2;
+        break;
+      }
     }
+
+    // Fallback: check for "Nivel" in first cell (Siigo format)
+    if (headerRowIdx < 0) {
+      const firstCell = String(row[0] || '').toLowerCase();
+      if (firstCell === 'nivel') {
+        headerRowIdx = i;
+        codeColIdx = 2;
+        nameColIdx = 3;
+        numsStartIdx = 4;
+      }
+    }
+
+    if (headerRowIdx >= 0) break;
   }
 
   const accounts: BalanceAccount[] = [];
@@ -65,24 +87,23 @@ async function parseBalanceExcel(fileUrl: string): Promise<BalanceAccount[]> {
 
   for (let i = startRow; i < allRows.length; i++) {
     const row = allRows[i] || [];
-    const code = String(row[0] || '').trim();
+    const code = String(row[codeColIdx] || '').trim();
     if (!code || !/^\d{1,8}$/.test(code)) continue;
 
-    const name = String(row[1] || '').trim();
-    const nums = row.slice(2).map((v) => {
+    const name = String(row[nameColIdx] || '').trim();
+    const nums = row.slice(numsStartIdx).map((v) => {
       const n = Number(v);
       return isNaN(n) ? 0 : n;
     });
 
+    // Siigo: Saldo Inicial | Mov Débito | Mov Crédito | Saldo Final
     accounts.push({
       code,
       account_name: name,
-      prev_debit: nums[0] || 0,
-      prev_credit: nums[1] || 0,
-      mov_debit: nums[2] || 0,
-      mov_credit: nums[3] || 0,
-      new_debit: nums[4] || 0,
-      new_credit: nums[5] || 0,
+      initial_balance: nums[0] || 0,
+      mov_debit: nums[1] || 0,
+      mov_credit: nums[2] || 0,
+      final_balance: nums[3] || 0,
     });
   }
 
