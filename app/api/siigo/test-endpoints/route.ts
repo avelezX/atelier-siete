@@ -77,7 +77,7 @@ export async function GET() {
     const YEAR = 2025;
     const CAJA = '11050501';
 
-    // 1) Monthly BP for Caja (11050501) to see when it went negative
+    // 1) Monthly BP for Caja
     const cajaMonthly: {
       month: string; saldo_inicial: number; mov_debit: number;
       mov_credit: number; saldo_final: number; net: number;
@@ -104,117 +104,129 @@ export async function GET() {
       if (m < 12) await new Promise(r => setTimeout(r, 500));
     }
 
-    // 2) Search DB for arriendo-related items touching caja or banco accounts
-    // Look for purchases from rent suppliers
-    const RENT_SUPPLIERS = ['BERNARDO', 'PRANHA', 'ATELIER'];
-    const purchases = await fetchAllRows('purchases', 'id, date, name, supplier_name');
-    const yearPurchases = purchases.filter(p => (p.date as string)?.startsWith(String(YEAR)));
-
-    const rentPurchases = yearPurchases.filter(p => {
-      const supplier = ((p.supplier_name as string) || '').toUpperCase();
-      return RENT_SUPPLIERS.some(s => supplier.includes(s));
-    });
-
-    // Get all items for these rent purchases
-    const rentPurchaseIds = rentPurchases.map(p => p.id as string);
-    const allPurchaseItems = rentPurchaseIds.length > 0
-      ? await fetchAllRows('purchase_items', 'account_code, price, quantity, purchase_id, description',
-          (q) => q.in('purchase_id', rentPurchaseIds))
-      : [];
-
-    // Group rent purchases with their items and account codes
-    const rentDetail = rentPurchases.map(p => {
-      const items = allPurchaseItems.filter(i => i.purchase_id === p.id);
-      return {
-        date: p.date,
-        doc: p.name,
-        supplier: p.supplier_name,
-        items: items.map(i => ({
-          account: i.account_code,
-          description: i.description,
-          amount: Math.round((Number(i.price) || 0) * (Number(i.quantity) || 1)),
-        })),
-      };
-    });
-
-    // 3) Search journal items for entries touching 1105 or 1110 with rent-related descriptions
+    // 2) ALL journal items touching caja (11050501) — to see what CC documents move caja
     const journalItemsCaja = await fetchAllRows(
       'journal_items', 'account_code, movement, value, journal_id, description',
       (q) => q.like('account_code', '1105%')
     );
-    const journalItemsBanco = await fetchAllRows(
-      'journal_items', 'account_code, movement, value, journal_id, description',
-      (q) => q.like('account_code', '1110%')
-    );
 
-    // Get journals for these items
-    const journalIds = [...new Set([
-      ...journalItemsCaja.map(i => i.journal_id as string),
-      ...journalItemsBanco.map(i => i.journal_id as string),
-    ])];
-    const journals = journalIds.length > 0
-      ? await fetchAllRows('journals', 'id, date, name', (q) => q.in('id', journalIds))
+    const cajaJournalIds = [...new Set(journalItemsCaja.map(i => i.journal_id as string))];
+    const cajaJournals = cajaJournalIds.length > 0
+      ? await fetchAllRows('journals', 'id, date, name', (q) => q.in('id', cajaJournalIds))
       : [];
-    const yearJournals = journals.filter(j => (j.date as string)?.startsWith(String(YEAR)));
-    const journalMap = new Map(yearJournals.map(j => [j.id as string, j]));
+    const yearCajaJournals = cajaJournals.filter(j => (j.date as string)?.startsWith(String(YEAR)));
+    const cajaJournalMap = new Map(yearCajaJournals.map(j => [j.id as string, j]));
 
-    // Filter to year and group
-    const cashBankJournalEntries = [...journalItemsCaja, ...journalItemsBanco]
-      .filter(i => journalMap.has(i.journal_id as string))
+    const cajaJournalEntries = journalItemsCaja
+      .filter(i => cajaJournalMap.has(i.journal_id as string))
       .map(i => {
-        const j = journalMap.get(i.journal_id as string)!;
+        const j = cajaJournalMap.get(i.journal_id as string)!;
         return {
-          date: j.date,
-          doc: j.name,
-          account: i.account_code,
-          movement: i.movement,
+          date: j.date as string,
+          doc: j.name as string,
+          movement: i.movement as string,
           value: Math.round(Number(i.value) || 0),
-          description: i.description,
+          description: (i.description as string) || '',
         };
       })
-      .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+      .sort((a, b) => a.date.localeCompare(b.date));
 
-    // Filter for rent-related keywords
-    const rentKeywords = ['arriendo', 'arrendamiento', 'bernardo', 'pranha', 'atelier', 'alquiler'];
-    const rentJournalEntries = cashBankJournalEntries.filter(e => {
-      const desc = ((e.description as string) || '').toLowerCase();
-      const doc = ((e.doc as string) || '').toLowerCase();
-      return rentKeywords.some(k => desc.includes(k) || doc.includes(k));
-    });
-
-    // Summary of all cash/bank journal movements by month
-    const cashBankByMonth = new Map<string, { caja_debit: number; caja_credit: number; banco_debit: number; banco_credit: number }>();
-    for (const e of cashBankJournalEntries) {
-      const month = String(e.date).substring(0, 7);
-      if (!cashBankByMonth.has(month)) cashBankByMonth.set(month, { caja_debit: 0, caja_credit: 0, banco_debit: 0, banco_credit: 0 });
-      const m = cashBankByMonth.get(month)!;
-      const isCaja = String(e.account).startsWith('1105');
-      if (e.movement === 'Debit') {
-        if (isCaja) m.caja_debit += e.value; else m.banco_debit += e.value;
-      } else {
-        if (isCaja) m.caja_credit += e.value; else m.banco_credit += e.value;
-      }
+    // 3) Group CC entries by description pattern to understand what moves caja
+    const descPatterns = new Map<string, { count: number; total_debit: number; total_credit: number; docs: string[] }>();
+    for (const e of cajaJournalEntries) {
+      // Normalize description to group similar ones
+      const desc = e.description.toUpperCase().trim() || '(sin descripción)';
+      if (!descPatterns.has(desc)) descPatterns.set(desc, { count: 0, total_debit: 0, total_credit: 0, docs: [] });
+      const p = descPatterns.get(desc)!;
+      p.count++;
+      if (e.movement === 'Debit') p.total_debit += e.value;
+      else p.total_credit += e.value;
+      if (!p.docs.includes(e.doc)) p.docs.push(e.doc);
     }
 
-    return NextResponse.json({
-      investigation: `Pagos de arriendo vs Caja/Banco — ${YEAR}`,
+    // 4) Check invoices (FV) — do they have payment info touching caja?
+    // Invoice items with account 1105
+    const invoiceItemsCaja = await fetchAllRows(
+      'invoice_items', 'account_code, price, quantity, invoice_id, description',
+      (q) => q.like('account_code', '1105%')
+    ).catch(() => [] as Record<string, unknown>[]);
 
-      caja_monthly: cajaMonthly,
+    // 5) Check purchase items touching caja
+    const purchaseItemsCaja = await fetchAllRows(
+      'purchase_items', 'account_code, price, quantity, purchase_id, description',
+      (q) => q.like('account_code', '1105%')
+    ).catch(() => [] as Record<string, unknown>[]);
+
+    // 6) Monthly summary: BP vs what we see in DB
+    const dbCajaByMonth = new Map<string, { cc_debit: number; cc_credit: number; cc_count: number }>();
+    for (const e of cajaJournalEntries) {
+      const month = e.date.substring(0, 7);
+      if (!dbCajaByMonth.has(month)) dbCajaByMonth.set(month, { cc_debit: 0, cc_credit: 0, cc_count: 0 });
+      const m = dbCajaByMonth.get(month)!;
+      m.cc_count++;
+      if (e.movement === 'Debit') m.cc_debit += e.value;
+      else m.cc_credit += e.value;
+    }
+
+    // Compare BP vs DB per month
+    const monthlyComparison = cajaMonthly.map(bp => {
+      const db = dbCajaByMonth.get(bp.month) || { cc_debit: 0, cc_credit: 0, cc_count: 0 };
+      return {
+        month: bp.month,
+        bp_debit: bp.mov_debit,
+        bp_credit: bp.mov_credit,
+        db_cc_debit: db.cc_debit,
+        db_cc_credit: db.cc_credit,
+        db_cc_count: db.cc_count,
+        gap_debit: bp.mov_debit - db.cc_debit,
+        gap_credit: bp.mov_credit - db.cc_credit,
+        gap_debit_pct: bp.mov_debit > 0 ? Math.round((bp.mov_debit - db.cc_debit) / bp.mov_debit * 100) : 0,
+        gap_credit_pct: bp.mov_credit > 0 ? Math.round((bp.mov_credit - db.cc_credit) / bp.mov_credit * 100) : 0,
+      };
+    });
+
+    // 7) All unique caja CC entries — full detail for analysis
+    const allCajaEntries = cajaJournalEntries.map(e => ({
+      date: e.date,
+      doc: e.doc,
+      movement: e.movement,
+      value: e.value,
+      description: e.description,
+    }));
+
+    // Sort description patterns by total movement
+    const sortedPatterns = Array.from(descPatterns.entries())
+      .map(([desc, data]) => ({ description: desc, ...data }))
+      .sort((a, b) => (b.total_debit + b.total_credit) - (a.total_debit + a.total_credit));
+
+    return NextResponse.json({
+      investigation: `Análisis profundo de Caja (${CAJA}) — ${YEAR}`,
+
+      caja_bp_monthly: cajaMonthly,
       caja_totals: {
-        saldo_inicio: cajaMonthly[0]?.saldo_inicial || 0,
-        total_debitos: cajaMonthly.reduce((s, m) => s + m.mov_debit, 0),
-        total_creditos: cajaMonthly.reduce((s, m) => s + m.mov_credit, 0),
-        saldo_fin: cajaMonthly[cajaMonthly.length - 1]?.saldo_final || 0,
+        bp_saldo_inicio: cajaMonthly[0]?.saldo_inicial || 0,
+        bp_total_debitos: cajaMonthly.reduce((s, m) => s + m.mov_debit, 0),
+        bp_total_creditos: cajaMonthly.reduce((s, m) => s + m.mov_credit, 0),
+        bp_saldo_fin: cajaMonthly[cajaMonthly.length - 1]?.saldo_final || 0,
+        db_cc_total_debitos: cajaJournalEntries.filter(e => e.movement === 'Debit').reduce((s, e) => s + e.value, 0),
+        db_cc_total_creditos: cajaJournalEntries.filter(e => e.movement === 'Credit').reduce((s, e) => s + e.value, 0),
       },
 
-      rent_purchases_in_db: rentDetail,
-      rent_journal_entries_cash_bank: rentJournalEntries.length > 0 ? rentJournalEntries : 'No se encontraron CCs de arriendo en caja/banco',
+      monthly_bp_vs_db: monthlyComparison,
 
-      cash_bank_journal_summary: Object.fromEntries(
-        Array.from(cashBankByMonth.entries()).sort(([a], [b]) => a.localeCompare(b))
-      ),
+      description_patterns: sortedPatterns,
 
-      total_cash_bank_journal_entries: cashBankJournalEntries.length,
+      invoice_items_touching_caja: invoiceItemsCaja.length,
+      purchase_items_touching_caja: purchaseItemsCaja.length,
+
+      all_caja_cc_entries: allCajaEntries,
+      total_cc_entries: allCajaEntries.length,
+
+      doc_types_in_caja: {
+        note: 'En Siigo, los documentos que mueven caja son: FV (con pago efectivo), CE (Comprobante Egreso), RC (Recibo Caja), CC (Comprobante Contable), AC (Asiento Cierre). Solo CC está en nuestra DB.',
+        available_via_api: ['CC (Comprobante Contable)', 'FV (Factura Venta)', 'FC (Factura Compra)', 'NC (Nota Crédito)', 'RC (Recibo Caja)'],
+        not_available_via_api: ['CE (Comprobante Egreso)', 'AC (Asiento Cierre)'],
+      },
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
