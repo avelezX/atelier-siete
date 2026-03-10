@@ -104,12 +104,11 @@ export async function GET() {
       if (m < 12) await new Promise(r => setTimeout(r, 500));
     }
 
-    // 2) ALL journal items touching caja (11050501) — to see what CC documents move caja
+    // 2) CC journal items touching caja
     const journalItemsCaja = await fetchAllRows(
       'journal_items', 'account_code, movement, value, journal_id, description',
       (q) => q.like('account_code', '1105%')
     );
-
     const cajaJournalIds = [...new Set(journalItemsCaja.map(i => i.journal_id as string))];
     const cajaJournals = cajaJournalIds.length > 0
       ? await fetchAllRows('journals', 'id, date, name', (q) => q.in('id', cajaJournalIds))
@@ -117,115 +116,157 @@ export async function GET() {
     const yearCajaJournals = cajaJournals.filter(j => (j.date as string)?.startsWith(String(YEAR)));
     const cajaJournalMap = new Map(yearCajaJournals.map(j => [j.id as string, j]));
 
-    const cajaJournalEntries = journalItemsCaja
-      .filter(i => cajaJournalMap.has(i.journal_id as string))
-      .map(i => {
-        const j = cajaJournalMap.get(i.journal_id as string)!;
-        return {
-          date: j.date as string,
-          doc: j.name as string,
-          movement: i.movement as string,
-          value: Math.round(Number(i.value) || 0),
-          description: (i.description as string) || '',
-        };
-      })
-      .sort((a, b) => a.date.localeCompare(b.date));
+    // 3) RC voucher items touching caja
+    const voucherItemsCaja = await fetchAllRows(
+      'voucher_items', 'account_code, movement, value, voucher_id, description',
+      (q) => q.like('account_code', '1105%')
+    ).catch(() => [] as Record<string, unknown>[]);
 
-    // 3) Group CC entries by description pattern to understand what moves caja
-    const descPatterns = new Map<string, { count: number; total_debit: number; total_credit: number; docs: string[] }>();
-    for (const e of cajaJournalEntries) {
-      // Normalize description to group similar ones
-      const desc = e.description.toUpperCase().trim() || '(sin descripción)';
-      if (!descPatterns.has(desc)) descPatterns.set(desc, { count: 0, total_debit: 0, total_credit: 0, docs: [] });
-      const p = descPatterns.get(desc)!;
-      p.count++;
-      if (e.movement === 'Debit') p.total_debit += e.value;
-      else p.total_credit += e.value;
-      if (!p.docs.includes(e.doc)) p.docs.push(e.doc);
-    }
+    const cajaVoucherIds = [...new Set(voucherItemsCaja.map(i => i.voucher_id as string))];
+    const cajaVouchers = cajaVoucherIds.length > 0
+      ? await fetchAllRows('vouchers', 'id, date, name, type', (q) => q.in('id', cajaVoucherIds))
+      : [];
+    const yearCajaVouchers = cajaVouchers.filter(v => (v.date as string)?.startsWith(String(YEAR)));
+    const cajaVoucherMap = new Map(yearCajaVouchers.map(v => [v.id as string, v]));
 
-    // 4) Check invoices (FV) — do they have payment info touching caja?
-    // Invoice items with account 1105
+    // 4) Also check invoice_items and purchase_items touching caja
     const invoiceItemsCaja = await fetchAllRows(
       'invoice_items', 'account_code, price, quantity, invoice_id, description',
       (q) => q.like('account_code', '1105%')
     ).catch(() => [] as Record<string, unknown>[]);
 
-    // 5) Check purchase items touching caja
     const purchaseItemsCaja = await fetchAllRows(
       'purchase_items', 'account_code, price, quantity, purchase_id, description',
       (q) => q.like('account_code', '1105%')
     ).catch(() => [] as Record<string, unknown>[]);
 
-    // 6) Monthly summary: BP vs what we see in DB
-    const dbCajaByMonth = new Map<string, { cc_debit: number; cc_credit: number; cc_count: number }>();
-    for (const e of cajaJournalEntries) {
-      const month = e.date.substring(0, 7);
-      if (!dbCajaByMonth.has(month)) dbCajaByMonth.set(month, { cc_debit: 0, cc_credit: 0, cc_count: 0 });
-      const m = dbCajaByMonth.get(month)!;
-      m.cc_count++;
-      if (e.movement === 'Debit') m.cc_debit += e.value;
-      else m.cc_credit += e.value;
+    // Build unified list of ALL DB entries touching caja
+    interface CajaEntry { date: string; doc: string; type: string; movement: string; value: number; description: string }
+    const allCajaEntries: CajaEntry[] = [];
+
+    // From CCs
+    for (const i of journalItemsCaja) {
+      const j = cajaJournalMap.get(i.journal_id as string);
+      if (!j) continue;
+      allCajaEntries.push({
+        date: j.date as string, doc: j.name as string, type: 'CC',
+        movement: i.movement as string, value: Math.round(Number(i.value) || 0),
+        description: (i.description as string) || '',
+      });
     }
 
-    // Compare BP vs DB per month
+    // From RCs (vouchers)
+    for (const i of voucherItemsCaja) {
+      const v = cajaVoucherMap.get(i.voucher_id as string);
+      if (!v) continue;
+      allCajaEntries.push({
+        date: v.date as string, doc: v.name as string, type: (v.type as string) || 'RC',
+        movement: i.movement as string, value: Math.round(Number(i.value) || 0),
+        description: (i.description as string) || '',
+      });
+    }
+
+    allCajaEntries.sort((a, b) => a.date.localeCompare(b.date));
+
+    // 5) Monthly comparison: BP vs ALL DB sources
+    const dbCajaByMonth = new Map<string, {
+      cc_debit: number; cc_credit: number; cc_count: number;
+      rc_debit: number; rc_credit: number; rc_count: number;
+      total_debit: number; total_credit: number;
+    }>();
+
+    for (const e of allCajaEntries) {
+      const month = e.date.substring(0, 7);
+      if (!dbCajaByMonth.has(month)) dbCajaByMonth.set(month, {
+        cc_debit: 0, cc_credit: 0, cc_count: 0,
+        rc_debit: 0, rc_credit: 0, rc_count: 0,
+        total_debit: 0, total_credit: 0,
+      });
+      const m = dbCajaByMonth.get(month)!;
+      const isCC = e.type === 'CC';
+      if (e.movement === 'Debit') {
+        if (isCC) { m.cc_debit += e.value; m.cc_count++; }
+        else { m.rc_debit += e.value; m.rc_count++; }
+        m.total_debit += e.value;
+      } else {
+        if (isCC) { m.cc_credit += e.value; m.cc_count++; }
+        else { m.rc_credit += e.value; m.rc_count++; }
+        m.total_credit += e.value;
+      }
+    }
+
     const monthlyComparison = cajaMonthly.map(bp => {
-      const db = dbCajaByMonth.get(bp.month) || { cc_debit: 0, cc_credit: 0, cc_count: 0 };
+      const db = dbCajaByMonth.get(bp.month) || {
+        cc_debit: 0, cc_credit: 0, cc_count: 0,
+        rc_debit: 0, rc_credit: 0, rc_count: 0,
+        total_debit: 0, total_credit: 0,
+      };
       return {
         month: bp.month,
         bp_debit: bp.mov_debit,
         bp_credit: bp.mov_credit,
         db_cc_debit: db.cc_debit,
         db_cc_credit: db.cc_credit,
-        db_cc_count: db.cc_count,
-        gap_debit: bp.mov_debit - db.cc_debit,
-        gap_credit: bp.mov_credit - db.cc_credit,
-        gap_debit_pct: bp.mov_debit > 0 ? Math.round((bp.mov_debit - db.cc_debit) / bp.mov_debit * 100) : 0,
-        gap_credit_pct: bp.mov_credit > 0 ? Math.round((bp.mov_credit - db.cc_credit) / bp.mov_credit * 100) : 0,
+        db_rc_debit: db.rc_debit,
+        db_rc_credit: db.rc_credit,
+        db_total_debit: db.total_debit,
+        db_total_credit: db.total_credit,
+        remaining_gap_debit: bp.mov_debit - db.total_debit,
+        remaining_gap_credit: bp.mov_credit - db.total_credit,
+        gap_debit_pct: bp.mov_debit > 0 ? Math.round((bp.mov_debit - db.total_debit) / bp.mov_debit * 100) : 0,
+        gap_credit_pct: bp.mov_credit > 0 ? Math.round((bp.mov_credit - db.total_credit) / bp.mov_credit * 100) : 0,
       };
     });
 
-    // 7) All unique caja CC entries — full detail for analysis
-    const allCajaEntries = cajaJournalEntries.map(e => ({
-      date: e.date,
-      doc: e.doc,
-      movement: e.movement,
-      value: e.value,
-      description: e.description,
-    }));
+    // 6) Group by doc type + description
+    const byDocType = new Map<string, { count: number; total_debit: number; total_credit: number }>();
+    for (const e of allCajaEntries) {
+      const key = e.type;
+      if (!byDocType.has(key)) byDocType.set(key, { count: 0, total_debit: 0, total_credit: 0 });
+      const d = byDocType.get(key)!;
+      d.count++;
+      if (e.movement === 'Debit') d.total_debit += e.value;
+      else d.total_credit += e.value;
+    }
 
-    // Sort description patterns by total movement
-    const sortedPatterns = Array.from(descPatterns.entries())
-      .map(([desc, data]) => ({ description: desc, ...data }))
-      .sort((a, b) => (b.total_debit + b.total_credit) - (a.total_debit + a.total_credit));
+    // Totals
+    const dbTotalDebit = allCajaEntries.filter(e => e.movement === 'Debit').reduce((s, e) => s + e.value, 0);
+    const dbTotalCredit = allCajaEntries.filter(e => e.movement === 'Credit').reduce((s, e) => s + e.value, 0);
+    const bpTotalDebit = cajaMonthly.reduce((s, m) => s + m.mov_debit, 0);
+    const bpTotalCredit = cajaMonthly.reduce((s, m) => s + m.mov_credit, 0);
 
     return NextResponse.json({
-      investigation: `Análisis profundo de Caja (${CAJA}) — ${YEAR}`,
+      investigation: `Análisis Caja (${CAJA}) — CC + RC + FV + FC — ${YEAR}`,
 
       caja_bp_monthly: cajaMonthly,
-      caja_totals: {
-        bp_saldo_inicio: cajaMonthly[0]?.saldo_inicial || 0,
-        bp_total_debitos: cajaMonthly.reduce((s, m) => s + m.mov_debit, 0),
-        bp_total_creditos: cajaMonthly.reduce((s, m) => s + m.mov_credit, 0),
-        bp_saldo_fin: cajaMonthly[cajaMonthly.length - 1]?.saldo_final || 0,
-        db_cc_total_debitos: cajaJournalEntries.filter(e => e.movement === 'Debit').reduce((s, e) => s + e.value, 0),
-        db_cc_total_creditos: cajaJournalEntries.filter(e => e.movement === 'Credit').reduce((s, e) => s + e.value, 0),
+
+      totals: {
+        bp_debitos: bpTotalDebit,
+        bp_creditos: bpTotalCredit,
+        db_debitos: dbTotalDebit,
+        db_creditos: dbTotalCredit,
+        gap_debitos: bpTotalDebit - dbTotalDebit,
+        gap_creditos: bpTotalCredit - dbTotalCredit,
+        gap_debit_pct: Math.round((bpTotalDebit - dbTotalDebit) / bpTotalDebit * 100),
+        gap_credit_pct: Math.round((bpTotalCredit - dbTotalCredit) / bpTotalCredit * 100),
       },
+
+      by_doc_type: Object.fromEntries(byDocType),
 
       monthly_bp_vs_db: monthlyComparison,
 
-      description_patterns: sortedPatterns,
-
       invoice_items_touching_caja: invoiceItemsCaja.length,
       purchase_items_touching_caja: purchaseItemsCaja.length,
+      voucher_items_touching_caja: voucherItemsCaja.length,
+      journal_items_touching_caja: journalItemsCaja.length,
 
-      all_caja_cc_entries: allCajaEntries,
-      total_cc_entries: allCajaEntries.length,
+      all_caja_entries_sample: allCajaEntries.slice(0, 30),
+      rc_entries: allCajaEntries.filter(e => e.type !== 'CC'),
+      total_entries: allCajaEntries.length,
 
-      doc_types_in_caja: {
-        note: 'En Siigo, los documentos que mueven caja son: FV (con pago efectivo), CE (Comprobante Egreso), RC (Recibo Caja), CC (Comprobante Contable), AC (Asiento Cierre). Solo CC está en nuestra DB.',
-        available_via_api: ['CC (Comprobante Contable)', 'FV (Factura Venta)', 'FC (Factura Compra)', 'NC (Nota Crédito)', 'RC (Recibo Caja)'],
-        not_available_via_api: ['CE (Comprobante Egreso)', 'AC (Asiento Cierre)'],
+      missing_doc_types: {
+        CE: 'Comprobante de Egreso — pagos desde caja/banco. NO disponible en API Siigo. Solo visible en Siigo Nube → Libro Auxiliar.',
+        AC: 'Asiento de Cierre — ajustes contables de cierre. NO disponible en API Siigo.',
       },
     });
   } catch (error: unknown) {
