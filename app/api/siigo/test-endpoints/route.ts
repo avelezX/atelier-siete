@@ -46,20 +46,33 @@ export async function GET() {
   try {
     const token = await getToken();
 
-    // Test sequentially to avoid timeouts
-    const endpoints = [
-      '/v1/purchase-invoices',
-      '/v1/journals',
-      '/v1/vouchers',
-      '/v1/document-types',
-    ];
+    // Fetch a single voucher to see item structure
+    const voucherRes = await fetch(`${SIIGO_API_URL}/v1/vouchers?page=1&page_size=2`, {
+      headers: {
+        'Authorization': token,
+        'Content-Type': 'application/json',
+        'Partner-Id': 'atelierSiete',
+      },
+    });
+    const voucherData = await voucherRes.json();
+    const sampleVouchers = (voucherData.results || []).slice(0, 2);
 
-    const results = [];
-    for (const path of endpoints) {
-      results.push(await testEndpoint(token, path));
-    }
+    // Also fetch a journal for comparison
+    const journalRes = await fetch(`${SIIGO_API_URL}/v1/journals?page=1&page_size=1`, {
+      headers: {
+        'Authorization': token,
+        'Content-Type': 'application/json',
+        'Partner-Id': 'atelierSiete',
+      },
+    });
+    const journalData = await journalRes.json();
+    const sampleJournal = (journalData.results || [])[0];
 
-    return NextResponse.json({ results });
+    return NextResponse.json({
+      voucher_total: voucherData.pagination?.total_results,
+      sample_vouchers: sampleVouchers,
+      sample_journal: sampleJournal,
+    });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     return NextResponse.json({ error: message }, { status: 500 });

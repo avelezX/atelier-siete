@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 // Routes that don't require authentication
-const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/siigo/balance-prueba', '/api/dashboard/comparar-balance'];
+const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/siigo/balance-prueba', '/api/dashboard/comparar-balance', '/api/siigo/test-endpoints'];
 const STATIC_PREFIXES = ['/_next/', '/favicon.ico'];
 
 // Simple hash function compatible with Edge Runtime (no Node.js crypto)
