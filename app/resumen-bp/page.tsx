@@ -10,6 +10,10 @@ import {
   ChevronDown,
   ChevronRight,
   Shield,
+  MessageSquare,
+  X,
+  Plus,
+  Trash2,
 } from 'lucide-react';
 import { formatCurrency } from '@/lib/utils';
 
@@ -71,6 +75,18 @@ interface ResumenBPData {
   annual_verification?: AnnualVerification;
 }
 
+interface BPNote {
+  id: string;
+  account_code: string;
+  month: string;
+  year: number;
+  note: string;
+  invoice_number: string | null;
+  supplier: string | null;
+  amount: number | null;
+  created_at: string;
+}
+
 function monthLabel(yyyymm: string): string {
   if (yyyymm === 'TOTAL') return 'TOTAL';
   const m = parseInt(yyyymm.split('-')[1]);
@@ -90,6 +106,12 @@ export default function ResumenBPPage() {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [year] = useState(2025);
 
+  // Notes state
+  const [notes, setNotes] = useState<BPNote[]>([]);
+  const [noteModal, setNoteModal] = useState<{ account_code: string; month: string; account_name: string } | null>(null);
+  const [newNote, setNewNote] = useState({ note: '', invoice_number: '', supplier: '', amount: '' });
+  const [savingNote, setSavingNote] = useState(false);
+
   function toggleRow(key: string) {
     setExpandedRows((prev) => {
       const next = new Set(prev);
@@ -98,6 +120,17 @@ export default function ResumenBPPage() {
       return next;
     });
   }
+
+  // Load notes
+  const loadNotes = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/bp-notes?year=${year}`);
+      const json = await res.json();
+      if (json.notes) setNotes(json.notes);
+    } catch {
+      // silently fail — notes are supplementary
+    }
+  }, [year]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -114,7 +147,56 @@ export default function ResumenBPPage() {
     }
   }, [year]);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => {
+    loadData();
+    loadNotes();
+  }, [loadData, loadNotes]);
+
+  // Notes helpers
+  function getNotesForCell(account_code: string, month: string): BPNote[] {
+    return notes.filter(n => n.account_code === account_code && n.month === month);
+  }
+
+  function getNoteCountForCode(account_code: string): number {
+    return notes.filter(n => n.account_code === account_code).length;
+  }
+
+  async function saveNote() {
+    if (!noteModal || !newNote.note.trim()) return;
+    setSavingNote(true);
+    try {
+      const res = await fetch('/api/bp-notes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          account_code: noteModal.account_code,
+          month: noteModal.month,
+          year,
+          note: newNote.note.trim(),
+          invoice_number: newNote.invoice_number.trim() || null,
+          supplier: newNote.supplier.trim() || null,
+          amount: newNote.amount ? parseFloat(newNote.amount) : null,
+        }),
+      });
+      const json = await res.json();
+      if (json.error) throw new Error(json.error);
+      await loadNotes();
+      setNewNote({ note: '', invoice_number: '', supplier: '', amount: '' });
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : 'Error guardando nota');
+    } finally {
+      setSavingNote(false);
+    }
+  }
+
+  async function deleteNote(id: string) {
+    try {
+      await fetch(`/api/bp-notes?id=${id}`, { method: 'DELETE' });
+      await loadNotes();
+    } catch {
+      // ignore
+    }
+  }
 
   const t = data?.totals;
   const months = data?.months || [];
@@ -380,6 +462,50 @@ export default function ResumenBPPage() {
             </div>
           </div>
 
+          {/* Notes Section */}
+          {notes.length > 0 && (
+            <div className="bg-white rounded-xl border border-amber-200 overflow-hidden mb-6">
+              <div className="px-4 py-3 bg-amber-50 border-b border-amber-200 flex items-center gap-2">
+                <MessageSquare className="w-4 h-4 text-amber-700" />
+                <h2 className="text-sm font-semibold text-amber-900">Notas Contables</h2>
+                <span className="text-xs text-amber-600 ml-auto">{notes.length} nota{notes.length !== 1 ? 's' : ''}</span>
+              </div>
+              <div className="divide-y divide-gray-100">
+                {notes.map((n) => (
+                  <div key={n.id} className="px-4 py-3 hover:bg-gray-50 group">
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-xs font-mono bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{n.account_code}</span>
+                          <span className="text-xs text-amber-700 font-medium">{monthLabel(n.month)}</span>
+                          {n.invoice_number && (
+                            <span className="text-xs bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded">
+                              {n.invoice_number}
+                            </span>
+                          )}
+                          {n.supplier && (
+                            <span className="text-xs text-gray-500">{n.supplier}</span>
+                          )}
+                          {n.amount && (
+                            <span className="text-xs font-medium text-gray-700">{formatCurrency(n.amount)}</span>
+                          )}
+                        </div>
+                        <p className="text-sm text-gray-700">{n.note}</p>
+                      </div>
+                      <button
+                        onClick={() => deleteNote(n.id)}
+                        className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-500 transition-all"
+                        title="Eliminar nota"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Annual Verification */}
           {data.annual_verification && (
             <div className="bg-white rounded-xl border border-gray-200 overflow-hidden mb-6">
@@ -473,6 +599,107 @@ export default function ResumenBPPage() {
           </div>
         </>
       ) : null}
+
+      {/* Note Modal */}
+      {noteModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setNoteModal(null)}>
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full" onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+              <div>
+                <h3 className="font-semibold text-gray-900">Nota Contable</h3>
+                <p className="text-xs text-gray-500">
+                  <span className="font-mono">{noteModal.account_code}</span> — {noteModal.account_name} — {monthLabel(noteModal.month)}
+                </p>
+              </div>
+              <button onClick={() => setNoteModal(null)} className="p-1 text-gray-400 hover:text-gray-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {/* Existing notes for this cell */}
+              {getNotesForCell(noteModal.account_code, noteModal.month).length > 0 && (
+                <div className="space-y-2">
+                  {getNotesForCell(noteModal.account_code, noteModal.month).map((n) => (
+                    <div key={n.id} className="bg-gray-50 rounded-lg p-3 text-sm group relative">
+                      <div className="flex items-center gap-2 mb-1">
+                        {n.invoice_number && (
+                          <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-medium">
+                            {n.invoice_number}
+                          </span>
+                        )}
+                        {n.supplier && <span className="text-xs text-gray-500">{n.supplier}</span>}
+                        {n.amount && <span className="text-xs font-medium text-gray-700">{formatCurrency(n.amount)}</span>}
+                      </div>
+                      <p className="text-gray-700">{n.note}</p>
+                      <button
+                        onClick={() => deleteNote(n.id)}
+                        className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-500"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* New note form */}
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs text-gray-500 mb-1 block">No. Factura</label>
+                    <input
+                      type="text"
+                      value={newNote.invoice_number}
+                      onChange={(e) => setNewNote((p) => ({ ...p, invoice_number: e.target.value }))}
+                      placeholder="FC-1-838"
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500 mb-1 block">Proveedor</label>
+                    <input
+                      type="text"
+                      value={newNote.supplier}
+                      onChange={(e) => setNewNote((p) => ({ ...p, supplier: e.target.value }))}
+                      placeholder="MALMO S.A.S"
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500 mb-1 block">Monto</label>
+                  <input
+                    type="text"
+                    value={newNote.amount}
+                    onChange={(e) => setNewNote((p) => ({ ...p, amount: e.target.value }))}
+                    placeholder="5407500"
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500 mb-1 block">Nota</label>
+                  <textarea
+                    value={newNote.note}
+                    onChange={(e) => setNewNote((p) => ({ ...p, note: e.target.value }))}
+                    placeholder="Remodelacion local..."
+                    rows={2}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 resize-none"
+                  />
+                </div>
+                <button
+                  onClick={saveNote}
+                  disabled={savingNote || !newNote.note.trim()}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50 text-sm font-medium transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  {savingNote ? 'Guardando...' : 'Agregar Nota'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 
@@ -512,27 +739,44 @@ export default function ResumenBPPage() {
             {formatCurrency(totalValue)}
           </td>
         </tr>
-        {isExpanded && subs.map((sub) => (
-          <tr key={sub.code} className={`border-b border-gray-50 ${bgExpand}`}>
-            <td className="pl-9 pr-4 py-1.5 text-xs text-gray-500 sticky left-0 truncate max-w-[180px]" title={`${sub.code} - ${sub.name}`}
-              style={{ backgroundColor: 'inherit' }}
-            >
-              <span className="font-mono text-gray-400 mr-1">{sub.code}</span>
-              {sub.name}
-            </td>
-            {months.map((m) => {
-              const val = sub.byMonth[m.month] || 0;
-              return (
-                <td key={m.month} className="px-3 py-1.5 text-right text-xs text-gray-500">
-                  {val !== 0 ? formatCurrency(val) : '-'}
-                </td>
-              );
-            })}
-            <td className="px-4 py-1.5 text-right text-xs font-medium text-gray-600 bg-gray-50/50">
-              {formatCurrency(sub.total)}
-            </td>
-          </tr>
-        ))}
+        {isExpanded && subs.map((sub) => {
+          const noteCount = getNoteCountForCode(sub.code);
+          return (
+            <tr key={sub.code} className={`border-b border-gray-50 ${bgExpand}`}>
+              <td className="pl-9 pr-4 py-1.5 text-xs text-gray-500 sticky left-0 truncate max-w-[180px]" title={`${sub.code} - ${sub.name}`}
+                style={{ backgroundColor: 'inherit' }}
+              >
+                <span className="font-mono text-gray-400 mr-1">{sub.code}</span>
+                {sub.name}
+                {noteCount > 0 && (
+                  <span className="ml-1 inline-flex items-center gap-0.5 text-amber-600" title={`${noteCount} nota(s)`}>
+                    <MessageSquare className="w-3 h-3" />
+                    <span className="text-[10px]">{noteCount}</span>
+                  </span>
+                )}
+              </td>
+              {months.map((m) => {
+                const val = sub.byMonth[m.month] || 0;
+                const cellNotes = getNotesForCell(sub.code, m.month);
+                return (
+                  <td
+                    key={m.month}
+                    className={`px-3 py-1.5 text-right text-xs text-gray-500 relative group cursor-pointer hover:bg-amber-50/50`}
+                    onClick={() => setNoteModal({ account_code: sub.code, month: m.month, account_name: sub.name })}
+                  >
+                    <span>{val !== 0 ? formatCurrency(val) : '-'}</span>
+                    {cellNotes.length > 0 && (
+                      <span className="absolute top-0.5 right-0.5 w-2 h-2 bg-amber-400 rounded-full" title={`${cellNotes.length} nota(s)`} />
+                    )}
+                  </td>
+                );
+              })}
+              <td className="px-4 py-1.5 text-right text-xs font-medium text-gray-600 bg-gray-50/50">
+                {formatCurrency(sub.total)}
+              </td>
+            </tr>
+          );
+        })}
       </>
     );
   }
