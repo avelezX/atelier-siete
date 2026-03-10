@@ -227,17 +227,28 @@ export async function GET(req: NextRequest) {
       voucherDateMap.set(v.id as string, (v.date as string) || '');
     });
 
-    // Voucher items: expenses (5%), COGS (6%), and revenue (41%)
-    const voucherExpenses = await fetchAllRows(
+    // Voucher items: get ALL to diagnose what accounts exist
+    const allVoucherItems = await fetchAllRows(
       'voucher_items',
-      'account_code, movement, value, voucher_id',
-      (q) => q.like('account_code', '5%').eq('movement', 'Debit')
+      'account_code, movement, value, voucher_id'
     );
-    const voucherCogs = await fetchAllRows(
-      'voucher_items',
-      'account_code, movement, value, voucher_id',
-      (q) => q.like('account_code', '6%').eq('movement', 'Debit')
-    );
+
+    // Diagnose account codes in voucher items
+    const voucherAccountCodes = new Map<string, number>();
+    allVoucherItems.forEach(item => {
+      const code2 = ((item.account_code as string) || '').substring(0, 2);
+      voucherAccountCodes.set(code2, (voucherAccountCodes.get(code2) || 0) + 1);
+    });
+
+    // Filter for expenses and COGS
+    const voucherExpenses = allVoucherItems.filter(item => {
+      const code = (item.account_code as string) || '';
+      return code.startsWith('5') && (item.movement as string) === 'Debit';
+    });
+    const voucherCogs = allVoucherItems.filter(item => {
+      const code = (item.account_code as string) || '';
+      return code.startsWith('6') && (item.movement as string) === 'Debit';
+    });
 
     // Purchase headers for dates
     const purchases = await fetchAllRows('purchases', 'id, date');
@@ -525,8 +536,10 @@ export async function GET(req: NextRequest) {
         purchase_expenses: gastosPurchase.length,
         purchase_cogs: cogsPurchase.length,
         vouchers: vouchers.length,
+        voucher_items_total: allVoucherItems.length,
         voucher_expenses: voucherExpenses.length,
         voucher_cogs: voucherCogs.length,
+        voucher_account_codes: Object.fromEntries(voucherAccountCodes),
         invoices: invoices.length,
         credit_notes: creditNotes.length,
       },
