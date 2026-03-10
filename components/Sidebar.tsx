@@ -49,6 +49,7 @@ const menuSections: MenuSection[] = [
       { name: "Costos Reales", href: "/cost-tracking", icon: DollarSign },
       { name: "Corrección Costos", href: "/correccion-costos", icon: Wrench },
       { name: "Inventario Propio", href: "/inventario", icon: Warehouse },
+      { name: "Saldos Inventario", href: "/saldos", icon: Package },
     ]
   },
   {
