@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Package, ChevronDown, ChevronRight, ShoppingBag, Handshake } from 'lucide-react';
+import { Package, ChevronDown, ChevronRight, ShoppingBag, Handshake, BarChart3 } from 'lucide-react';
 import { formatCurrency } from '@/lib/utils';
 
 interface ProductBalance {
@@ -36,6 +36,18 @@ interface CategorySummary {
   products_without_cost: number;
 }
 
+interface MonthBalance {
+  month: string;
+  month_label: string;
+  own_units: number;
+  own_products: number;
+  own_cost_value: number;
+  own_sale_value: number;
+  cons_units: number;
+  cons_products: number;
+  cons_sale_value: number;
+}
+
 interface SaldosData {
   summary: {
     own: CategorySummary;
@@ -44,6 +56,7 @@ interface SaldosData {
   };
   own_by_supplier: SupplierGroup[];
   consignment_by_supplier: SupplierGroup[];
+  monthly_balance: MonthBalance[];
 }
 
 function SummaryCard({ title, icon: Icon, data, color }: {
@@ -235,6 +248,98 @@ export default function SaldosPage() {
           color="border-gray-200"
         />
       </div>
+
+      {/* Chart: Own inventory cost by month */}
+      {data.monthly_balance && data.monthly_balance.length > 0 && (() => {
+        const balances = data.monthly_balance;
+        const maxCost = Math.max(...balances.map((mb) => mb.own_cost_value), 1);
+        return (
+          <div className="bg-white rounded-xl border mb-8 p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <BarChart3 className="w-5 h-5 text-amber-600" />
+              <h3 className="text-lg font-semibold text-gray-900">Costo Inventario Propio — Fin de Mes</h3>
+            </div>
+            <div className="flex items-end gap-1 h-48">
+              {balances.map((mb) => {
+                const height = maxCost > 0 ? (mb.own_cost_value / maxCost) * 100 : 0;
+                return (
+                  <div key={mb.month} className="flex-1 flex flex-col items-center group relative">
+                    <div className="absolute bottom-full mb-1 hidden group-hover:block z-10">
+                      <div className="bg-gray-900 text-white text-xs px-2 py-1 rounded whitespace-nowrap">
+                        {mb.month_label}: {formatCurrency(mb.own_cost_value)}
+                        <br />{mb.own_units} uds · {mb.own_products} prod
+                      </div>
+                    </div>
+                    <div
+                      className="w-full bg-amber-400 hover:bg-amber-500 rounded-t transition-colors min-h-[2px]"
+                      style={{ height: `${height}%` }}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex gap-1 mt-1">
+              {balances.map((mb) => (
+                <div key={mb.month} className="flex-1 text-center">
+                  <span className="text-[9px] text-gray-400 leading-none">
+                    {mb.month_label.split(' ')[0]}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="flex justify-between mt-2 text-xs text-gray-400">
+              <span>{balances[0]?.month_label}</span>
+              <span>{balances[balances.length - 1]?.month_label}</span>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Monthly balance table */}
+      {data.monthly_balance && data.monthly_balance.length > 0 && (
+        <div className="bg-white rounded-xl border mb-8 overflow-x-auto">
+          <div className="px-6 py-4 border-b">
+            <h3 className="text-lg font-semibold text-gray-900">Saldo a Fin de Mes</h3>
+            <p className="text-sm text-gray-500">
+              Stock reconstruido: stock actual ajustado por compras y ventas de cada mes
+            </p>
+          </div>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left border-b bg-gray-50">
+                <th className="px-4 py-3 font-medium text-gray-600">Mes</th>
+                <th className="px-4 py-3 font-medium text-amber-700 text-right">Propios Uds</th>
+                <th className="px-4 py-3 font-medium text-amber-700 text-right">Propios # Prod</th>
+                <th className="px-4 py-3 font-medium text-amber-700 text-right">Costo Propios</th>
+                <th className="px-4 py-3 font-medium text-amber-700 text-right">Venta Propios</th>
+                <th className="px-4 py-3 font-medium text-blue-700 text-right">Consig. Uds</th>
+                <th className="px-4 py-3 font-medium text-blue-700 text-right">Consig. # Prod</th>
+                <th className="px-4 py-3 font-medium text-blue-700 text-right">Venta Consig.</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {data.monthly_balance.map((mb) => (
+                <tr key={mb.month} className="hover:bg-gray-50">
+                  <td className="px-4 py-2 font-medium text-gray-900">{mb.month_label}</td>
+                  <td className="px-4 py-2 text-right">{mb.own_units.toLocaleString()}</td>
+                  <td className="px-4 py-2 text-right text-gray-500">{mb.own_products}</td>
+                  <td className="px-4 py-2 text-right font-medium text-amber-700">
+                    {mb.own_cost_value > 0 ? formatCurrency(mb.own_cost_value) : '—'}
+                  </td>
+                  <td className="px-4 py-2 text-right text-amber-600">
+                    {formatCurrency(mb.own_sale_value)}
+                  </td>
+                  <td className="px-4 py-2 text-right">{mb.cons_units.toLocaleString()}</td>
+                  <td className="px-4 py-2 text-right text-gray-500">{mb.cons_products}</td>
+                  <td className="px-4 py-2 text-right text-blue-600">
+                    {formatCurrency(mb.cons_sale_value)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-2 mb-6">
