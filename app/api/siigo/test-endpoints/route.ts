@@ -1,136 +1,147 @@
 import { NextResponse } from 'next/server';
-import { atelierTableAdmin } from '@/lib/supabase';
+import { fetchTestBalanceReport } from '@/lib/siigo';
+import * as XLSX from 'xlsx';
 
 export const maxDuration = 60;
 
-// Paginated fetch helper
-async function fetchAllRows(
-  table: string,
-  select: string,
-  applyFilters?: (query: ReturnType<typeof atelierTableAdmin>) => ReturnType<typeof atelierTableAdmin>
-) {
-  const PAGE_SIZE = 1000;
-  let allData: Record<string, unknown>[] = [];
-  let from = 0;
-  while (true) {
-    let query = atelierTableAdmin(table).select(select).range(from, from + PAGE_SIZE - 1);
-    if (applyFilters) query = applyFilters(query);
-    const { data, error } = await query;
-    if (error) throw new Error(`${table}: ${error.message}`);
-    if (!data || data.length === 0) break;
-    allData = allData.concat(data);
-    if (data.length < PAGE_SIZE) break;
-    from += PAGE_SIZE;
+// Parse BP Excel — return ALL accounts
+interface BPAccount {
+  code: string;
+  name: string;
+  saldo_inicial: number;
+  mov_debit: number;
+  mov_credit: number;
+  saldo_final: number;
+}
+
+async function parseBalanceExcel(fileUrl: string): Promise<BPAccount[]> {
+  const fileRes = await fetch(fileUrl);
+  if (!fileRes.ok) throw new Error(`Download failed: ${fileRes.status}`);
+  const buffer = await fileRes.arrayBuffer();
+
+  const workbook = XLSX.read(buffer, { type: 'array' });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const allRows: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
+
+  let headerRowIdx = -1;
+  let codeColIdx = 0;
+  let nameColIdx = 1;
+  let numsStartIdx = 2;
+
+  for (let i = 0; i < Math.min(allRows.length, 10); i++) {
+    const row = allRows[i] || [];
+    for (let col = 0; col < row.length; col++) {
+      const cell = String(row[col] || '').toLowerCase();
+      if (cell.includes('código cuenta') || cell.includes('codigo cuenta') || cell === 'código' || cell === 'codigo') {
+        headerRowIdx = i;
+        codeColIdx = col;
+        nameColIdx = col + 1;
+        numsStartIdx = col + 2;
+        break;
+      }
+    }
+    if (headerRowIdx < 0) {
+      const firstCell = String(row[0] || '').toLowerCase();
+      if (firstCell === 'nivel') {
+        headerRowIdx = i;
+        codeColIdx = 2;
+        nameColIdx = 3;
+        numsStartIdx = 4;
+      }
+    }
+    if (headerRowIdx >= 0) break;
   }
-  return allData;
+
+  const accounts: BPAccount[] = [];
+  const startRow = headerRowIdx >= 0 ? headerRowIdx + 1 : 0;
+
+  for (let i = startRow; i < allRows.length; i++) {
+    const row = allRows[i] || [];
+    const code = String(row[codeColIdx] || '').trim();
+    if (!code || !/^\d{1,8}$/.test(code)) continue;
+
+    const name = String(row[nameColIdx] || '').trim();
+    const nums = row.slice(numsStartIdx).map((v) => {
+      const n = Number(v);
+      return isNaN(n) ? 0 : n;
+    });
+
+    accounts.push({
+      code,
+      name,
+      saldo_inicial: nums[0] || 0,
+      mov_debit: nums[1] || 0,
+      mov_credit: nums[2] || 0,
+      saldo_final: nums[3] || 0,
+    });
+  }
+
+  return accounts;
 }
 
 export async function GET() {
   try {
-    // === Investigate 5145 (Mantenimiento) for October 2025 ===
+    // Fetch October 2025 Balance de Prueba from Siigo
+    const report = await fetchTestBalanceReport(2025, 10, 10);
+    if (!report.file_url) {
+      return NextResponse.json({ error: 'No file_url from Siigo for Oct 2025' }, { status: 500 });
+    }
 
-    // 1. Journals with 5145% items in Oct 2025
-    const journals = await fetchAllRows('journals', 'id, name, date');
-    const oct2025Journals = journals.filter(j => (j.date as string)?.startsWith('2025-10'));
-    const octJournalIds = new Set(oct2025Journals.map(j => j.id as string));
+    const allAccounts = await parseBalanceExcel(report.file_url);
 
-    const items5145 = await fetchAllRows(
-      'journal_items',
-      'account_code, movement, value, journal_id, description',
-      (q) => q.like('account_code', '5145%')
+    // Filter all accounts under 5145
+    const accounts5145 = allAccounts
+      .filter(a => a.code.startsWith('5145'))
+      .sort((a, b) => a.code.localeCompare(b.code));
+
+    // Identify leaf accounts (no children)
+    const leafAccounts = accounts5145.filter(acc =>
+      !accounts5145.some(other => other.code !== acc.code && other.code.startsWith(acc.code))
     );
 
-    const oct5145FromJournals = items5145
-      .filter(i => octJournalIds.has(i.journal_id as string))
-      .map(i => {
-        const journal = oct2025Journals.find(j => j.id === i.journal_id);
-        return {
-          source: 'CC',
-          journal_name: (journal?.name as string) || '',
-          journal_date: (journal?.date as string) || '',
-          account_code: i.account_code as string,
-          movement: i.movement as string,
-          value: Number(i.value) || 0,
-          description: (i.description as string) || '',
-        };
-      })
-      .sort((a, b) => b.value - a.value);
+    // Sum of leaves
+    const leafDebitTotal = leafAccounts.reduce((s, a) => s + a.mov_debit, 0);
+    const leafCreditTotal = leafAccounts.reduce((s, a) => s + a.mov_credit, 0);
 
-    // 2. Purchase items with 5145% in Oct 2025
-    const purchases = await fetchAllRows('purchases', 'id, date, name, supplier_name');
-    const oct2025Purchases = purchases.filter(p => (p.date as string)?.startsWith('2025-10'));
-    const octPurchaseIds = new Set(oct2025Purchases.map(p => p.id as string));
-
-    const purchaseItems5145 = await fetchAllRows(
-      'purchase_items',
-      'account_code, price, quantity, purchase_id, description',
-      (q) => q.like('account_code', '5145%')
-    );
-
-    const oct5145FromPurchases = purchaseItems5145
-      .filter(i => octPurchaseIds.has(i.purchase_id as string))
-      .map(i => {
-        const purchase = oct2025Purchases.find(p => p.id === i.purchase_id);
-        return {
-          source: 'FC',
-          purchase_name: (purchase?.name as string) || '',
-          purchase_date: (purchase?.date as string) || '',
-          supplier: (purchase?.supplier_name as string) || '',
-          account_code: i.account_code as string,
-          price: Number(i.price) || 0,
-          quantity: Number(i.quantity) || 1,
-          total: (Number(i.price) || 0) * (Number(i.quantity) || 1),
-          description: (i.description as string) || '',
-        };
-      })
-      .sort((a, b) => b.total - a.total);
-
-    // 3. Also get ALL 5145 items across all months for context
-    const all5145ByMonth = new Map<string, { cc_debit: number; cc_credit: number; fc_total: number }>();
-    items5145.forEach(i => {
-      const journalDate = journals.find(j => j.id === i.journal_id)?.date as string;
-      const month = journalDate?.substring(0, 7);
-      if (!month) return;
-      if (!all5145ByMonth.has(month)) all5145ByMonth.set(month, { cc_debit: 0, cc_credit: 0, fc_total: 0 });
-      const entry = all5145ByMonth.get(month)!;
-      const val = Number(i.value) || 0;
-      if (i.movement === 'Debit') entry.cc_debit += val;
-      else entry.cc_credit += val;
-    });
-    purchaseItems5145.forEach(i => {
-      const purchaseDate = purchases.find(p => p.id === i.purchase_id)?.date as string;
-      const month = purchaseDate?.substring(0, 7);
-      if (!month) return;
-      if (!all5145ByMonth.has(month)) all5145ByMonth.set(month, { cc_debit: 0, cc_credit: 0, fc_total: 0 });
-      const entry = all5145ByMonth.get(month)!;
-      entry.fc_total += (Number(i.price) || 0) * (Number(i.quantity) || 1);
-    });
+    // Also get the 5145 parent row directly
+    const parent5145 = allAccounts.find(a => a.code === '5145');
 
     return NextResponse.json({
-      investigation: '5145 Mantenimiento - Octubre 2025',
-      oct_2025: {
-        journals_count: oct2025Journals.length,
-        purchases_count: oct2025Purchases.length,
-        cc_items: oct5145FromJournals,
-        cc_total_debit: Math.round(oct5145FromJournals.filter(i => i.movement === 'Debit').reduce((s, i) => s + i.value, 0)),
-        cc_total_credit: Math.round(oct5145FromJournals.filter(i => i.movement === 'Credit').reduce((s, i) => s + i.value, 0)),
-        fc_items: oct5145FromPurchases,
-        fc_total: Math.round(oct5145FromPurchases.reduce((s, i) => s + i.total, 0)),
-        grand_total: Math.round(
-          oct5145FromJournals.filter(i => i.movement === 'Debit').reduce((s, i) => s + i.value, 0) +
-          oct5145FromPurchases.reduce((s, i) => s + i.total, 0)
-        ),
+      investigation: '5145 Mantenimiento - Octubre 2025 (desde Balance de Prueba Siigo)',
+      parent_account: parent5145 ? {
+        code: parent5145.code,
+        name: parent5145.name,
+        mov_debit: Math.round(parent5145.mov_debit),
+        mov_credit: Math.round(parent5145.mov_credit),
+        net: Math.round(parent5145.mov_debit - parent5145.mov_credit),
+      } : null,
+      all_sub_accounts: accounts5145.map(a => ({
+        code: a.code,
+        name: a.name,
+        saldo_inicial: Math.round(a.saldo_inicial),
+        mov_debit: Math.round(a.mov_debit),
+        mov_credit: Math.round(a.mov_credit),
+        saldo_final: Math.round(a.saldo_final),
+        net_movement: Math.round(a.mov_debit - a.mov_credit),
+        is_leaf: leafAccounts.some(l => l.code === a.code),
+      })),
+      leaf_summary: {
+        count: leafAccounts.length,
+        total_debit: Math.round(leafDebitTotal),
+        total_credit: Math.round(leafCreditTotal),
+        net: Math.round(leafDebitTotal - leafCreditTotal),
       },
-      monthly_summary_5145: Object.fromEntries(
-        Array.from(all5145ByMonth.entries())
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([month, data]) => [month, {
-            cc_debit: Math.round(data.cc_debit),
-            cc_credit: Math.round(data.cc_credit),
-            fc_total: Math.round(data.fc_total),
-            net: Math.round(data.cc_debit - data.cc_credit + data.fc_total),
-          }])
-      ),
+      // Top leaf accounts by debit
+      top_items: leafAccounts
+        .sort((a, b) => b.mov_debit - a.mov_debit)
+        .slice(0, 20)
+        .map(a => ({
+          code: a.code,
+          name: a.name,
+          mov_debit: Math.round(a.mov_debit),
+          mov_credit: Math.round(a.mov_credit),
+          net: Math.round(a.mov_debit - a.mov_credit),
+        })),
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
