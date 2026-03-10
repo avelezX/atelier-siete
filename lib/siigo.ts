@@ -348,6 +348,24 @@ export async function fetchAllPurchases(): Promise<SiigoPurchase[]> {
   return fetchAllPages<SiigoPurchase>('/v1/purchases');
 }
 
+/** Fetch Balance de Prueba (Trial Balance) report from Siigo */
+export async function fetchTestBalanceReport(
+  year: number,
+  monthStart: number,
+  monthEnd: number,
+  accountStart = '1',
+  accountEnd = '9999'
+): Promise<{ file_id: string; file_url: string }> {
+  return siigoPost<{ file_id: string; file_url: string }>('/v1/test-balance-report', {
+    account_start: accountStart,
+    account_end: accountEnd,
+    year,
+    month_start: monthStart,
+    month_end: monthEnd,
+    includes_tax_difference: false,
+  });
+}
+
 /** Invalidate cached token */
 export function invalidateToken() {
   cachedToken = null;
