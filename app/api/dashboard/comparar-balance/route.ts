@@ -220,6 +220,25 @@ export async function GET(req: NextRequest) {
       (q) => q.like('account_code', '6135%')
     );
 
+    // Vouchers (recibos de caja) — missing source of expenses!
+    const vouchers = await fetchAllRows('vouchers', 'id, date');
+    const voucherDateMap = new Map<string, string>();
+    vouchers.forEach((v) => {
+      voucherDateMap.set(v.id as string, (v.date as string) || '');
+    });
+
+    // Voucher items: expenses (5%), COGS (6%), and revenue (41%)
+    const voucherExpenses = await fetchAllRows(
+      'voucher_items',
+      'account_code, movement, value, voucher_id',
+      (q) => q.like('account_code', '5%').eq('movement', 'Debit')
+    );
+    const voucherCogs = await fetchAllRows(
+      'voucher_items',
+      'account_code, movement, value, voucher_id',
+      (q) => q.like('account_code', '6%').eq('movement', 'Debit')
+    );
+
     // Purchase headers for dates
     const purchases = await fetchAllRows('purchases', 'id, date');
     const purchaseDateMap = new Map<string, string>();
@@ -346,6 +365,36 @@ export async function GET(req: NextRequest) {
       const value = (Number(item.price) || 0) * qty;
       const m = ensureMonth(month);
       m.costo_ventas_fc += value;
+      m.costo_ventas += value;
+
+      const prefix4 = (item.account_code as string).substring(0, 4);
+      m.subcats[prefix4] = (m.subcats[prefix4] || 0) + value;
+    });
+
+    // Expenses from vouchers (RC — recibos de caja)
+    voucherExpenses.forEach((item) => {
+      const date = voucherDateMap.get(item.voucher_id as string);
+      const month = date?.substring(0, 7);
+      if (!month) return;
+      const value = Number(item.value) || 0;
+      const code = item.account_code as string;
+      const m = ensureMonth(month);
+
+      if (code.startsWith('51')) m.gastos_admin += value;
+      else if (code.startsWith('52')) m.gastos_venta += value;
+      else if (code.startsWith('53')) m.gastos_financieros += value;
+
+      const prefix4 = code.substring(0, 4);
+      m.subcats[prefix4] = (m.subcats[prefix4] || 0) + value;
+    });
+
+    // COGS from vouchers (RC)
+    voucherCogs.forEach((item) => {
+      const date = voucherDateMap.get(item.voucher_id as string);
+      const month = date?.substring(0, 7);
+      if (!month) return;
+      const value = Number(item.value) || 0;
+      const m = ensureMonth(month);
       m.costo_ventas += value;
 
       const prefix4 = (item.account_code as string).substring(0, 4);
