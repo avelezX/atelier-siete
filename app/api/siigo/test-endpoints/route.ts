@@ -81,41 +81,43 @@ async function parseBalanceExcel(fileUrl: string): Promise<BPAccount[]> {
 
 export async function GET() {
   try {
-    // Fetch October 2025 Balance de Prueba from Siigo
-    const report = await fetchTestBalanceReport(2025, 10, 10);
+    // === Configurable investigation ===
+    const ACCOUNT_PREFIX = '5135';  // Servicios
+    const MONTH = 12;               // Diciembre
+    const YEAR = 2025;
+
+    const report = await fetchTestBalanceReport(YEAR, MONTH, MONTH);
     if (!report.file_url) {
-      return NextResponse.json({ error: 'No file_url from Siigo for Oct 2025' }, { status: 500 });
+      return NextResponse.json({ error: `No file_url from Siigo for ${YEAR}-${MONTH}` }, { status: 500 });
     }
 
     const allAccounts = await parseBalanceExcel(report.file_url);
 
-    // Filter all accounts under 5145
-    const accounts5145 = allAccounts
-      .filter(a => a.code.startsWith('5145'))
+    // Filter all accounts under prefix
+    const targetAccounts = allAccounts
+      .filter(a => a.code.startsWith(ACCOUNT_PREFIX))
       .sort((a, b) => a.code.localeCompare(b.code));
 
     // Identify leaf accounts (no children)
-    const leafAccounts = accounts5145.filter(acc =>
-      !accounts5145.some(other => other.code !== acc.code && other.code.startsWith(acc.code))
+    const leafAccounts = targetAccounts.filter(acc =>
+      !targetAccounts.some(other => other.code !== acc.code && other.code.startsWith(acc.code))
     );
 
-    // Sum of leaves
     const leafDebitTotal = leafAccounts.reduce((s, a) => s + a.mov_debit, 0);
     const leafCreditTotal = leafAccounts.reduce((s, a) => s + a.mov_credit, 0);
 
-    // Also get the 5145 parent row directly
-    const parent5145 = allAccounts.find(a => a.code === '5145');
+    const parentAccount = allAccounts.find(a => a.code === ACCOUNT_PREFIX);
 
     return NextResponse.json({
-      investigation: '5145 Mantenimiento - Octubre 2025 (desde Balance de Prueba Siigo)',
-      parent_account: parent5145 ? {
-        code: parent5145.code,
-        name: parent5145.name,
-        mov_debit: Math.round(parent5145.mov_debit),
-        mov_credit: Math.round(parent5145.mov_credit),
-        net: Math.round(parent5145.mov_debit - parent5145.mov_credit),
+      investigation: `${ACCOUNT_PREFIX} ${parentAccount?.name || '?'} - ${YEAR}-${String(MONTH).padStart(2,'0')} (Balance de Prueba Siigo)`,
+      parent_account: parentAccount ? {
+        code: parentAccount.code,
+        name: parentAccount.name,
+        mov_debit: Math.round(parentAccount.mov_debit),
+        mov_credit: Math.round(parentAccount.mov_credit),
+        net: Math.round(parentAccount.mov_debit - parentAccount.mov_credit),
       } : null,
-      all_sub_accounts: accounts5145.map(a => ({
+      all_sub_accounts: targetAccounts.map(a => ({
         code: a.code,
         name: a.name,
         saldo_inicial: Math.round(a.saldo_inicial),
@@ -131,7 +133,6 @@ export async function GET() {
         total_credit: Math.round(leafCreditTotal),
         net: Math.round(leafDebitTotal - leafCreditTotal),
       },
-      // Top leaf accounts by debit
       top_items: leafAccounts
         .sort((a, b) => b.mov_debit - a.mov_debit)
         .slice(0, 20)
