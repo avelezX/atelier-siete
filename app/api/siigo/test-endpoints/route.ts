@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { fetchTestBalanceReport } from '@/lib/siigo';
+import { atelierTableAdmin } from '@/lib/supabase';
 import * as XLSX from 'xlsx';
 
 export const maxDuration = 120;
@@ -51,47 +52,169 @@ async function parseBalanceExcel(fileUrl: string): Promise<BPAccount[]> {
   return accounts;
 }
 
+async function fetchAllRows(
+  table: string, select: string,
+  applyFilters?: (query: ReturnType<typeof atelierTableAdmin>) => ReturnType<typeof atelierTableAdmin>
+) {
+  const PAGE_SIZE = 1000;
+  let allData: Record<string, unknown>[] = [];
+  let from = 0;
+  while (true) {
+    let query = atelierTableAdmin(table).select(select).range(from, from + PAGE_SIZE - 1);
+    if (applyFilters) query = applyFilters(query);
+    const { data, error } = await query;
+    if (error) throw new Error(`${table}: ${error.message}`);
+    if (!data || data.length === 0) break;
+    allData = allData.concat(data);
+    if (data.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+  return allData;
+}
+
 export async function GET() {
   try {
     const YEAR = 2025;
+    const CAJA = '11050501';
 
-    // Get annual BP and find ALL accounts under 11 (Disponible = Caja + Bancos)
-    const annualReport = await fetchTestBalanceReport(YEAR, 1, 12);
-    if (!annualReport.file_url) {
-      return NextResponse.json({ error: 'No annual report available' }, { status: 500 });
+    // 1) Monthly BP for Caja (11050501) to see when it went negative
+    const cajaMonthly: {
+      month: string; saldo_inicial: number; mov_debit: number;
+      mov_credit: number; saldo_final: number; net: number;
+    }[] = [];
+
+    for (let m = 1; m <= 12; m++) {
+      try {
+        const report = await fetchTestBalanceReport(YEAR, m, m);
+        if (report.file_url) {
+          const accounts = await parseBalanceExcel(report.file_url);
+          const acc = accounts.find(a => a.code === CAJA);
+          if (acc) {
+            cajaMonthly.push({
+              month: `${YEAR}-${String(m).padStart(2, '0')}`,
+              saldo_inicial: Math.round(acc.saldo_inicial),
+              mov_debit: Math.round(acc.mov_debit),
+              mov_credit: Math.round(acc.mov_credit),
+              saldo_final: Math.round(acc.saldo_final),
+              net: Math.round(acc.mov_debit - acc.mov_credit),
+            });
+          }
+        }
+      } catch { /* skip */ }
+      if (m < 12) await new Promise(r => setTimeout(r, 500));
     }
 
-    const allAccounts = await parseBalanceExcel(annualReport.file_url);
+    // 2) Search DB for arriendo-related items touching caja or banco accounts
+    // Look for purchases from rent suppliers
+    const RENT_SUPPLIERS = ['BERNARDO', 'PRANHA', 'ATELIER'];
+    const purchases = await fetchAllRows('purchases', 'id, date, name, supplier_name');
+    const yearPurchases = purchases.filter(p => (p.date as string)?.startsWith(String(YEAR)));
 
-    // All accounts under 11 (Disponible): 1105=Caja, 1110=Bancos, 1120=Cuentas de Ahorro, etc.
-    const disponible = allAccounts
-      .filter(a => a.code.startsWith('11'))
-      .map(a => ({
-        code: a.code,
-        name: a.name,
-        saldo_inicial: Math.round(a.saldo_inicial),
-        mov_debit: Math.round(a.mov_debit),
-        mov_credit: Math.round(a.mov_credit),
-        saldo_final: Math.round(a.saldo_final),
-        level: a.code.length <= 2 ? 'clase' : a.code.length <= 4 ? 'grupo' : a.code.length <= 6 ? 'cuenta' : 'auxiliar',
-      }))
-      .sort((a, b) => a.code.localeCompare(b.code));
+    const rentPurchases = yearPurchases.filter(p => {
+      const supplier = ((p.supplier_name as string) || '').toUpperCase();
+      return RENT_SUPPLIERS.some(s => supplier.includes(s));
+    });
 
-    // Specifically highlight caja (1105) accounts
-    const cajaAccounts = disponible.filter(a => a.code.startsWith('1105'));
-    const bancoAccounts = disponible.filter(a => a.code.startsWith('1110'));
+    // Get all items for these rent purchases
+    const rentPurchaseIds = rentPurchases.map(p => p.id as string);
+    const allPurchaseItems = rentPurchaseIds.length > 0
+      ? await fetchAllRows('purchase_items', 'account_code, price, quantity, purchase_id, description',
+          (q) => q.in('purchase_id', rentPurchaseIds))
+      : [];
+
+    // Group rent purchases with their items and account codes
+    const rentDetail = rentPurchases.map(p => {
+      const items = allPurchaseItems.filter(i => i.purchase_id === p.id);
+      return {
+        date: p.date,
+        doc: p.name,
+        supplier: p.supplier_name,
+        items: items.map(i => ({
+          account: i.account_code,
+          description: i.description,
+          amount: Math.round((Number(i.price) || 0) * (Number(i.quantity) || 1)),
+        })),
+      };
+    });
+
+    // 3) Search journal items for entries touching 1105 or 1110 with rent-related descriptions
+    const journalItemsCaja = await fetchAllRows(
+      'journal_items', 'account_code, movement, value, journal_id, description',
+      (q) => q.like('account_code', '1105%')
+    );
+    const journalItemsBanco = await fetchAllRows(
+      'journal_items', 'account_code, movement, value, journal_id, description',
+      (q) => q.like('account_code', '1110%')
+    );
+
+    // Get journals for these items
+    const journalIds = [...new Set([
+      ...journalItemsCaja.map(i => i.journal_id as string),
+      ...journalItemsBanco.map(i => i.journal_id as string),
+    ])];
+    const journals = journalIds.length > 0
+      ? await fetchAllRows('journals', 'id, date, name', (q) => q.in('id', journalIds))
+      : [];
+    const yearJournals = journals.filter(j => (j.date as string)?.startsWith(String(YEAR)));
+    const journalMap = new Map(yearJournals.map(j => [j.id as string, j]));
+
+    // Filter to year and group
+    const cashBankJournalEntries = [...journalItemsCaja, ...journalItemsBanco]
+      .filter(i => journalMap.has(i.journal_id as string))
+      .map(i => {
+        const j = journalMap.get(i.journal_id as string)!;
+        return {
+          date: j.date,
+          doc: j.name,
+          account: i.account_code,
+          movement: i.movement,
+          value: Math.round(Number(i.value) || 0),
+          description: i.description,
+        };
+      })
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+
+    // Filter for rent-related keywords
+    const rentKeywords = ['arriendo', 'arrendamiento', 'bernardo', 'pranha', 'atelier', 'alquiler'];
+    const rentJournalEntries = cashBankJournalEntries.filter(e => {
+      const desc = ((e.description as string) || '').toLowerCase();
+      const doc = ((e.doc as string) || '').toLowerCase();
+      return rentKeywords.some(k => desc.includes(k) || doc.includes(k));
+    });
+
+    // Summary of all cash/bank journal movements by month
+    const cashBankByMonth = new Map<string, { caja_debit: number; caja_credit: number; banco_debit: number; banco_credit: number }>();
+    for (const e of cashBankJournalEntries) {
+      const month = String(e.date).substring(0, 7);
+      if (!cashBankByMonth.has(month)) cashBankByMonth.set(month, { caja_debit: 0, caja_credit: 0, banco_debit: 0, banco_credit: 0 });
+      const m = cashBankByMonth.get(month)!;
+      const isCaja = String(e.account).startsWith('1105');
+      if (e.movement === 'Debit') {
+        if (isCaja) m.caja_debit += e.value; else m.banco_debit += e.value;
+      } else {
+        if (isCaja) m.caja_credit += e.value; else m.banco_credit += e.value;
+      }
+    }
 
     return NextResponse.json({
-      investigation: `Cuentas de Disponible (11) — Caja y Bancos — ${YEAR}`,
-      year: YEAR,
-      all_disponible: disponible,
-      caja_1105: cajaAccounts.length > 0 ? cajaAccounts : 'No hay cuentas de caja (1105)',
-      bancos_1110: bancoAccounts,
-      summary: {
-        total_cuentas: disponible.filter(a => a.level === 'auxiliar').length,
-        caja_exists: cajaAccounts.length > 0,
-        banco_exists: bancoAccounts.length > 0,
+      investigation: `Pagos de arriendo vs Caja/Banco — ${YEAR}`,
+
+      caja_monthly: cajaMonthly,
+      caja_totals: {
+        saldo_inicio: cajaMonthly[0]?.saldo_inicial || 0,
+        total_debitos: cajaMonthly.reduce((s, m) => s + m.mov_debit, 0),
+        total_creditos: cajaMonthly.reduce((s, m) => s + m.mov_credit, 0),
+        saldo_fin: cajaMonthly[cajaMonthly.length - 1]?.saldo_final || 0,
       },
+
+      rent_purchases_in_db: rentDetail,
+      rent_journal_entries_cash_bank: rentJournalEntries.length > 0 ? rentJournalEntries : 'No se encontraron CCs de arriendo en caja/banco',
+
+      cash_bank_journal_summary: Object.fromEntries(
+        Array.from(cashBankByMonth.entries()).sort(([a], [b]) => a.localeCompare(b))
+      ),
+
+      total_cash_bank_journal_entries: cashBankJournalEntries.length,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
