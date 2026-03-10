@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   BarChart3,
   RefreshCw,
@@ -111,6 +111,39 @@ export default function ResumenBPPage() {
   const [noteModal, setNoteModal] = useState<{ account_code: string; month: string; account_name: string } | null>(null);
   const [newNote, setNewNote] = useState({ note: '', invoice_number: '', supplier: '', amount: '' });
   const [savingNote, setSavingNote] = useState(false);
+
+  // Supplier detail state (3rd level expansion)
+  const [expandedSubcats, setExpandedSubcats] = useState<Set<string>>(new Set());
+  const [supplierData, setSupplierData] = useState<Record<string, {
+    by_month: Record<string, { supplier: string; amount: number; invoices: string[] }[]>;
+    yearly_totals: { supplier: string; amount: number; invoices: string[] }[];
+  }>>({});
+  const [loadingSuppliers, setLoadingSuppliers] = useState<Set<string>>(new Set());
+
+  async function toggleSubcat(code: string) {
+    const next = new Set(expandedSubcats);
+    if (next.has(code)) {
+      next.delete(code);
+    } else {
+      next.add(code);
+      // Fetch supplier data if not already loaded
+      if (!supplierData[code]) {
+        setLoadingSuppliers(prev => new Set(prev).add(code));
+        try {
+          const res = await fetch(`/api/dashboard/account-suppliers?prefix=${code}&year=${year}`);
+          const json = await res.json();
+          if (!json.error) {
+            setSupplierData(prev => ({ ...prev, [code]: { by_month: json.by_month, yearly_totals: json.yearly_totals } }));
+          }
+        } catch {
+          // ignore
+        } finally {
+          setLoadingSuppliers(prev => { const s = new Set(prev); s.delete(code); return s; });
+        }
+      }
+    }
+    setExpandedSubcats(next);
+  }
 
   function toggleRow(key: string) {
     setExpandedRows((prev) => {
@@ -813,40 +846,91 @@ export default function ResumenBPPage() {
         </tr>
         {isExpanded && subs.map((sub) => {
           const noteCount = getNoteCountForCode(sub.code);
+          const isSubExpanded = expandedSubcats.has(sub.code);
+          const isLoadingSup = loadingSuppliers.has(sub.code);
+          const supData = supplierData[sub.code];
+
           return (
-            <tr key={sub.code} className={`border-b border-gray-50 ${bgExpand}`}>
-              <td className="pl-9 pr-4 py-1.5 text-xs text-gray-500 sticky left-0 truncate max-w-[180px]" title={`${sub.code} - ${sub.name}`}
-                style={{ backgroundColor: 'inherit' }}
-              >
-                <span className="font-mono text-gray-400 mr-1">{sub.code}</span>
-                {sub.name}
-                {noteCount > 0 && (
-                  <span className="ml-1 inline-flex items-center gap-0.5 text-amber-600" title={`${noteCount} nota(s)`}>
-                    <MessageSquare className="w-3 h-3" />
-                    <span className="text-[10px]">{noteCount}</span>
+            <React.Fragment key={sub.code}>
+              <tr className={`border-b border-gray-50 ${bgExpand} cursor-pointer`} onClick={() => toggleSubcat(sub.code)}>
+                <td className="pl-9 pr-4 py-1.5 text-xs text-gray-500 sticky left-0 truncate max-w-[180px]" title={`${sub.code} - ${sub.name}`}
+                  style={{ backgroundColor: 'inherit' }}
+                >
+                  <span className="inline-flex items-center gap-1">
+                    {isSubExpanded ? <ChevronDown className="w-2.5 h-2.5 text-gray-400" /> : <ChevronRight className="w-2.5 h-2.5 text-gray-400" />}
+                    <span className="font-mono text-gray-400">{sub.code}</span>
+                    {sub.name}
                   </span>
-                )}
-              </td>
-              {months.map((m) => {
-                const val = sub.byMonth[m.month] || 0;
-                const cellNotes = getNotesForCell(sub.code, m.month);
-                return (
-                  <td
-                    key={m.month}
-                    className={`px-3 py-1.5 text-right text-xs text-gray-500 relative group cursor-pointer hover:bg-amber-50/50`}
-                    onClick={() => setNoteModal({ account_code: sub.code, month: m.month, account_name: sub.name })}
-                  >
-                    <span>{val !== 0 ? formatCurrency(val) : '-'}</span>
-                    {cellNotes.length > 0 && (
-                      <span className="absolute top-0.5 right-0.5 w-2 h-2 bg-amber-400 rounded-full" title={`${cellNotes.length} nota(s)`} />
-                    )}
-                  </td>
-                );
-              })}
-              <td className="px-4 py-1.5 text-right text-xs font-medium text-gray-600 bg-gray-50/50">
-                {formatCurrency(sub.total)}
-              </td>
-            </tr>
+                  {noteCount > 0 && (
+                    <span className="ml-1 inline-flex items-center gap-0.5 text-amber-600" title={`${noteCount} nota(s)`}>
+                      <MessageSquare className="w-3 h-3" />
+                      <span className="text-[10px]">{noteCount}</span>
+                    </span>
+                  )}
+                </td>
+                {months.map((m) => {
+                  const val = sub.byMonth[m.month] || 0;
+                  const cellNotes = getNotesForCell(sub.code, m.month);
+                  return (
+                    <td
+                      key={m.month}
+                      className="px-3 py-1.5 text-right text-xs text-gray-500 relative"
+                      onClick={(e) => { e.stopPropagation(); setNoteModal({ account_code: sub.code, month: m.month, account_name: sub.name }); }}
+                    >
+                      <span className="hover:bg-amber-50/50 cursor-pointer">{val !== 0 ? formatCurrency(val) : '-'}</span>
+                      {cellNotes.length > 0 && (
+                        <span className="absolute top-0.5 right-0.5 w-2 h-2 bg-amber-400 rounded-full" title={`${cellNotes.length} nota(s)`} />
+                      )}
+                    </td>
+                  );
+                })}
+                <td className="px-4 py-1.5 text-right text-xs font-medium text-gray-600 bg-gray-50/50">
+                  {formatCurrency(sub.total)}
+                </td>
+              </tr>
+
+              {/* 3rd level: Supplier detail */}
+              {isSubExpanded && (
+                isLoadingSup ? (
+                  <tr className="border-b border-gray-50">
+                    <td colSpan={months.length + 2} className="pl-14 py-2 text-xs text-gray-400">
+                      <RefreshCw className="w-3 h-3 animate-spin inline mr-1" /> Cargando proveedores...
+                    </td>
+                  </tr>
+                ) : supData && supData.yearly_totals.length > 0 ? (
+                  supData.yearly_totals.map((sup) => (
+                    <tr key={sup.supplier} className="border-b border-gray-50 bg-white/50">
+                      <td className="pl-14 pr-4 py-1 text-[11px] text-gray-400 sticky left-0 truncate max-w-[180px]" style={{ backgroundColor: 'inherit' }}
+                        title={`${sup.supplier} — ${sup.invoices.join(', ')}`}
+                      >
+                        <span className="text-gray-500">{sup.supplier}</span>
+                        {sup.invoices.length > 0 && (
+                          <span className="ml-1 text-[9px] text-blue-400">({sup.invoices.join(', ')})</span>
+                        )}
+                      </td>
+                      {months.map((m) => {
+                        const monthSuppliers = supData.by_month[m.month] || [];
+                        const entry = monthSuppliers.find(s => s.supplier === sup.supplier);
+                        return (
+                          <td key={m.month} className="px-3 py-1 text-right text-[11px] text-gray-400">
+                            {entry && entry.amount > 0 ? formatCurrency(entry.amount) : '-'}
+                          </td>
+                        );
+                      })}
+                      <td className="px-4 py-1 text-right text-[11px] font-medium text-gray-500 bg-gray-50/30">
+                        {formatCurrency(sup.amount)}
+                      </td>
+                    </tr>
+                  ))
+                ) : supData ? (
+                  <tr className="border-b border-gray-50">
+                    <td colSpan={months.length + 2} className="pl-14 py-2 text-[11px] text-gray-400 italic">
+                      Sin detalle de proveedores en DB (datos provienen de CE/otros documentos)
+                    </td>
+                  </tr>
+                ) : null
+              )}
+            </React.Fragment>
           );
         })}
       </>
