@@ -220,34 +220,27 @@ export async function GET(req: NextRequest) {
       (q) => q.like('account_code', '6135%')
     );
 
-    // Vouchers (recibos de caja) — missing source of expenses!
-    const vouchers = await fetchAllRows('vouchers', 'id, date');
-    const voucherDateMap = new Map<string, string>();
-    vouchers.forEach((v) => {
-      voucherDateMap.set(v.id as string, (v.date as string) || '');
-    });
-
-    // Voucher items: get ALL to diagnose what accounts exist
-    const allVoucherItems = await fetchAllRows(
-      'voucher_items',
-      'account_code, movement, value, voucher_id'
+    // Diagnose: ALL journal_items for 5% (both Debit and Credit) to see if we miss credits
+    const allJournal5 = await fetchAllRows(
+      'journal_items',
+      'account_code, movement, value, journal_id',
+      (q) => q.like('account_code', '5%')
     );
+    const journal5Debit = allJournal5.filter(i => i.movement === 'Debit');
+    const journal5Credit = allJournal5.filter(i => i.movement === 'Credit');
 
-    // Diagnose account codes in voucher items
-    const voucherAccountCodes = new Map<string, number>();
-    allVoucherItems.forEach(item => {
-      const code2 = ((item.account_code as string) || '').substring(0, 2);
-      voucherAccountCodes.set(code2, (voucherAccountCodes.get(code2) || 0) + 1);
-    });
-
-    // Filter for expenses and COGS
-    const voucherExpenses = allVoucherItems.filter(item => {
-      const code = (item.account_code as string) || '';
-      return code.startsWith('5') && (item.movement as string) === 'Debit';
-    });
-    const voucherCogs = allVoucherItems.filter(item => {
-      const code = (item.account_code as string) || '';
-      return code.startsWith('6') && (item.movement as string) === 'Debit';
+    // Diagnose: ALL purchase_items to see what account codes exist
+    const allPurchaseItems = await fetchAllRows(
+      'purchase_items',
+      'account_code, price, quantity'
+    );
+    const purchaseAccountCodes = new Map<string, {count: number, total: number}>();
+    allPurchaseItems.forEach(item => {
+      const code4 = ((item.account_code as string) || '').substring(0, 4);
+      if (!purchaseAccountCodes.has(code4)) purchaseAccountCodes.set(code4, {count: 0, total: 0});
+      const entry = purchaseAccountCodes.get(code4)!;
+      entry.count++;
+      entry.total += (Number(item.price) || 0) * (Number(item.quantity) || 1);
     });
 
     // Purchase headers for dates
@@ -382,35 +375,9 @@ export async function GET(req: NextRequest) {
       m.subcats[prefix4] = (m.subcats[prefix4] || 0) + value;
     });
 
-    // Expenses from vouchers (RC — recibos de caja)
-    voucherExpenses.forEach((item) => {
-      const date = voucherDateMap.get(item.voucher_id as string);
-      const month = date?.substring(0, 7);
-      if (!month) return;
-      const value = Number(item.value) || 0;
-      const code = item.account_code as string;
-      const m = ensureMonth(month);
-
-      if (code.startsWith('51')) m.gastos_admin += value;
-      else if (code.startsWith('52')) m.gastos_venta += value;
-      else if (code.startsWith('53')) m.gastos_financieros += value;
-
-      const prefix4 = code.substring(0, 4);
-      m.subcats[prefix4] = (m.subcats[prefix4] || 0) + value;
-    });
-
-    // COGS from vouchers (RC)
-    voucherCogs.forEach((item) => {
-      const date = voucherDateMap.get(item.voucher_id as string);
-      const month = date?.substring(0, 7);
-      if (!month) return;
-      const value = Number(item.value) || 0;
-      const m = ensureMonth(month);
-      m.costo_ventas += value;
-
-      const prefix4 = (item.account_code as string).substring(0, 4);
-      m.subcats[prefix4] = (m.subcats[prefix4] || 0) + value;
-    });
+    // NOTE: Voucher items have NO account codes in Siigo API (only "due" references).
+    // Voucher accounting entries are auto-generated as journal entries by Siigo.
+    // So voucher_items are NOT a source of expenses — journals already capture them.
 
     // === PART D: Build comparison ===
     const months = [];
@@ -535,11 +502,16 @@ export async function GET(req: NextRequest) {
         purchases: purchases.length,
         purchase_expenses: gastosPurchase.length,
         purchase_cogs: cogsPurchase.length,
-        vouchers: vouchers.length,
-        voucher_items_total: allVoucherItems.length,
-        voucher_expenses: voucherExpenses.length,
-        voucher_cogs: voucherCogs.length,
-        voucher_account_codes: Object.fromEntries(voucherAccountCodes),
+        journal_expenses_5_total: allJournal5.length,
+        journal_expenses_5_debit: journal5Debit.length,
+        journal_expenses_5_credit: journal5Credit.length,
+        journal_5_credit_total: Math.round(journal5Credit.reduce((s, i) => s + (Number(i.value) || 0), 0)),
+        purchase_items_all: allPurchaseItems.length,
+        purchase_account_breakdown: Object.fromEntries(
+          Array.from(purchaseAccountCodes.entries())
+            .sort((a, b) => b[1].total - a[1].total)
+            .map(([k, v]) => [k, { count: v.count, total: Math.round(v.total) }])
+        ),
         invoices: invoices.length,
         credit_notes: creditNotes.length,
       },
