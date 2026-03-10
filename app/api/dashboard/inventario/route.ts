@@ -149,8 +149,9 @@ export async function GET() {
         return productCode ? allOwnProductCodes.has(productCode) : false;
       }
       if (itemType === 'Account') {
-        // PUC account → only 6135/1435 are inventory purchases
-        return accountCode.startsWith('6135') || accountCode.startsWith('1435');
+        // PUC account items (6135/1435) can't be classified as own vs consignment
+        // because the accountant doesn't specify the product — exclude from movement
+        return false;
       }
       if (itemType === 'FixedAsset') {
         return false; // Fixed assets are not inventory
@@ -160,10 +161,8 @@ export async function GET() {
       if (accountCode && !/^[0-9]/.test(accountCode)) {
         return allOwnProductCodes.has(accountCode);
       }
-      // Legacy PUC accounts
-      if (accountCode.startsWith('6135') || accountCode.startsWith('1435')) {
-        return true;
-      }
+      // Legacy PUC accounts — same issue, can't classify own vs consignment
+      // if (accountCode.startsWith('6135') || accountCode.startsWith('1435')) return true;
       return false;
     }
 
@@ -360,27 +359,6 @@ export async function GET() {
     const fromFC = productList.filter((p) => p.cost_source.startsWith('FC directa'));
     const fromCOGS = productList.filter((p) => p.cost_source.startsWith('COGS 6135'));
 
-    // DEBUG: check filter is working
-    const debugPurchases = {
-      total_items: allPurchaseItems.length,
-      filtered_items: inventoryPurchaseItems.length,
-      filtered_total: Math.round(inventoryPurchaseItems.reduce((s, pi) => {
-        const price = Number(pi.price) || 0;
-        const qty = Number(pi.quantity) || 1;
-        return s + price * qty;
-      }, 0)),
-      by_type: {
-        product: allPurchaseItems.filter(pi => pi.item_type === 'Product').length,
-        account: allPurchaseItems.filter(pi => pi.item_type === 'Account').length,
-        null: allPurchaseItems.filter(pi => !pi.item_type).length,
-      },
-      filtered_by_type: {
-        product: inventoryPurchaseItems.filter(pi => pi.item_type === 'Product').length,
-        account: inventoryPurchaseItems.filter(pi => pi.item_type === 'Account').length,
-        null: inventoryPurchaseItems.filter(pi => !pi.item_type).length,
-      },
-    };
-
     const summary = {
       total_products: productList.length,
       total_units: productList.reduce((s, p) => s + p.qty, 0),
@@ -420,7 +398,6 @@ export async function GET() {
       summary,
       suppliers,
       monthly_movement: monthlyMovement,
-      _debug_purchases: debugPurchases,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
