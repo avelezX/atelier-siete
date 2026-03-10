@@ -53,75 +53,45 @@ async function parseBalanceExcel(fileUrl: string): Promise<BPAccount[]> {
 
 export async function GET() {
   try {
-    const ACCOUNT = '11100501';
     const YEAR = 2025;
 
-    const monthlyData: {
-      month: string;
-      saldo_inicial: number;
-      mov_debit: number;
-      mov_credit: number;
-      saldo_final: number;
-      net: number;
-    }[] = [];
-
-    // Fetch each month
-    for (let m = 1; m <= 12; m++) {
-      try {
-        const report = await fetchTestBalanceReport(YEAR, m, m);
-        if (report.file_url) {
-          const accounts = await parseBalanceExcel(report.file_url);
-          const acc = accounts.find(a => a.code === ACCOUNT);
-          if (acc) {
-            monthlyData.push({
-              month: `${YEAR}-${String(m).padStart(2, '0')}`,
-              saldo_inicial: Math.round(acc.saldo_inicial),
-              mov_debit: Math.round(acc.mov_debit),
-              mov_credit: Math.round(acc.mov_credit),
-              saldo_final: Math.round(acc.saldo_final),
-              net: Math.round(acc.mov_debit - acc.mov_credit),
-            });
-          }
-        }
-      } catch {
-        // skip
-      }
-      if (m < 12) await new Promise(r => setTimeout(r, 500));
+    // Get annual BP and find ALL accounts under 11 (Disponible = Caja + Bancos)
+    const annualReport = await fetchTestBalanceReport(YEAR, 1, 12);
+    if (!annualReport.file_url) {
+      return NextResponse.json({ error: 'No annual report available' }, { status: 500 });
     }
 
-    // Annual totals
-    const totalDebit = monthlyData.reduce((s, m) => s + m.mov_debit, 0);
-    const totalCredit = monthlyData.reduce((s, m) => s + m.mov_credit, 0);
-    const firstSaldo = monthlyData.length > 0 ? monthlyData[0].saldo_inicial : 0;
-    const lastSaldo = monthlyData.length > 0 ? monthlyData[monthlyData.length - 1].saldo_final : 0;
+    const allAccounts = await parseBalanceExcel(annualReport.file_url);
 
-    // Also get all 111xx accounts from the annual BP for context
-    let relatedAccounts: { code: string; name: string; saldo_final: number }[] = [];
-    try {
-      const annualReport = await fetchTestBalanceReport(YEAR, 1, 12);
-      if (annualReport.file_url) {
-        const annualAccs = await parseBalanceExcel(annualReport.file_url);
-        relatedAccounts = annualAccs
-          .filter(a => a.code.startsWith('1110'))
-          .map(a => ({ code: a.code, name: a.name, saldo_final: Math.round(a.saldo_final) }))
-          .sort((a, b) => a.code.localeCompare(b.code));
-      }
-    } catch {
-      // skip
-    }
+    // All accounts under 11 (Disponible): 1105=Caja, 1110=Bancos, 1120=Cuentas de Ahorro, etc.
+    const disponible = allAccounts
+      .filter(a => a.code.startsWith('11'))
+      .map(a => ({
+        code: a.code,
+        name: a.name,
+        saldo_inicial: Math.round(a.saldo_inicial),
+        mov_debit: Math.round(a.mov_debit),
+        mov_credit: Math.round(a.mov_credit),
+        saldo_final: Math.round(a.saldo_final),
+        level: a.code.length <= 2 ? 'clase' : a.code.length <= 4 ? 'grupo' : a.code.length <= 6 ? 'cuenta' : 'auxiliar',
+      }))
+      .sort((a, b) => a.code.localeCompare(b.code));
+
+    // Specifically highlight caja (1105) accounts
+    const cajaAccounts = disponible.filter(a => a.code.startsWith('1105'));
+    const bancoAccounts = disponible.filter(a => a.code.startsWith('1110'));
 
     return NextResponse.json({
-      investigation: `${ACCOUNT} Cuenta Corriente Bancolombia — ${YEAR}`,
-      account: ACCOUNT,
-      monthly: monthlyData,
-      totals: {
-        saldo_inicio_anio: firstSaldo,
-        total_debitos: totalDebit,
-        total_creditos: totalCredit,
-        net_anual: totalDebit - totalCredit,
-        saldo_fin_anio: lastSaldo,
+      investigation: `Cuentas de Disponible (11) — Caja y Bancos — ${YEAR}`,
+      year: YEAR,
+      all_disponible: disponible,
+      caja_1105: cajaAccounts.length > 0 ? cajaAccounts : 'No hay cuentas de caja (1105)',
+      bancos_1110: bancoAccounts,
+      summary: {
+        total_cuentas: disponible.filter(a => a.level === 'auxiliar').length,
+        caja_exists: cajaAccounts.length > 0,
+        banco_exists: bancoAccounts.length > 0,
       },
-      related_accounts: relatedAccounts,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
