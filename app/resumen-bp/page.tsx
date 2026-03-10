@@ -462,49 +462,121 @@ export default function ResumenBPPage() {
             </div>
           </div>
 
-          {/* Notes Section */}
-          {notes.length > 0 && (
-            <div className="bg-white rounded-xl border border-amber-200 overflow-hidden mb-6">
-              <div className="px-4 py-3 bg-amber-50 border-b border-amber-200 flex items-center gap-2">
-                <MessageSquare className="w-4 h-4 text-amber-700" />
-                <h2 className="text-sm font-semibold text-amber-900">Notas Contables</h2>
-                <span className="text-xs text-amber-600 ml-auto">{notes.length} nota{notes.length !== 1 ? 's' : ''}</span>
-              </div>
-              <div className="divide-y divide-gray-100">
-                {notes.map((n) => (
-                  <div key={n.id} className="px-4 py-3 hover:bg-gray-50 group">
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="text-xs font-mono bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{n.account_code}</span>
-                          <span className="text-xs text-amber-700 font-medium">{monthLabel(n.month)}</span>
-                          {n.invoice_number && (
-                            <span className="text-xs bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded">
-                              {n.invoice_number}
-                            </span>
-                          )}
-                          {n.supplier && (
-                            <span className="text-xs text-gray-500">{n.supplier}</span>
-                          )}
-                          {n.amount && (
-                            <span className="text-xs font-medium text-gray-700">{formatCurrency(n.amount)}</span>
-                          )}
-                        </div>
-                        <p className="text-sm text-gray-700">{n.note}</p>
-                      </div>
-                      <button
-                        onClick={() => deleteNote(n.id)}
-                        className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-500 transition-all"
-                        title="Eliminar nota"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
+          {/* Notes Section — grouped by account, colored by type */}
+          {notes.length > 0 && (() => {
+            // Group notes by account_code
+            const grouped = new Map<string, BPNote[]>();
+            for (const n of notes) {
+              const key = n.account_code;
+              if (!grouped.has(key)) grouped.set(key, []);
+              grouped.get(key)!.push(n);
+            }
+
+            // Color mapping by account prefix
+            function accountColor(code: string): { bg: string; border: string; header: string; badge: string } {
+              if (code.startsWith('42')) return { bg: 'bg-emerald-50', border: 'border-emerald-200', header: 'text-emerald-900', badge: 'bg-emerald-100 text-emerald-700' };
+              if (code.startsWith('51')) return { bg: 'bg-orange-50', border: 'border-orange-200', header: 'text-orange-900', badge: 'bg-orange-100 text-orange-700' };
+              if (code.startsWith('52')) return { bg: 'bg-amber-50', border: 'border-amber-200', header: 'text-amber-900', badge: 'bg-amber-100 text-amber-700' };
+              if (code.startsWith('53')) return { bg: 'bg-purple-50', border: 'border-purple-200', header: 'text-purple-900', badge: 'bg-purple-100 text-purple-700' };
+              if (code.startsWith('61')) return { bg: 'bg-red-50', border: 'border-red-200', header: 'text-red-900', badge: 'bg-red-100 text-red-700' };
+              return { bg: 'bg-gray-50', border: 'border-gray-200', header: 'text-gray-900', badge: 'bg-gray-100 text-gray-700' };
+            }
+
+            // Doc type badge color
+            function docBadge(inv: string | null): { label: string; cls: string } | null {
+              if (!inv) return null;
+              if (inv.startsWith('FC')) return { label: inv, cls: 'bg-blue-100 text-blue-700' };
+              if (inv.startsWith('CC')) return { label: inv, cls: 'bg-slate-100 text-slate-700' };
+              if (inv.startsWith('AC')) return { label: inv, cls: 'bg-violet-100 text-violet-700' };
+              if (inv.startsWith('CE')) return { label: inv, cls: 'bg-pink-100 text-pink-700' };
+              if (inv.startsWith('FV')) return { label: inv, cls: 'bg-green-100 text-green-700' };
+              if (inv.startsWith('NC')) return { label: inv, cls: 'bg-red-100 text-red-700' };
+              return { label: inv, cls: 'bg-gray-100 text-gray-600' };
+            }
+
+            // Account name lookup
+            function accountName(code: string): string {
+              const names: Record<string, string> = {
+                '4210': 'Financieros — Descuentos comerciales',
+                '4295': 'Diversos — Otros ingresos',
+                '5105': 'Gastos de personal',
+                '5120': 'Arrendamientos',
+                '5135': 'Servicios',
+                '5145': 'Mantenimiento y reparaciones',
+              };
+              return names[code] || code;
+            }
+
+            const sortedGroups = Array.from(grouped.entries()).sort(([a], [b]) => a.localeCompare(b));
+
+            return (
+              <div className="space-y-4 mb-6">
+                <div className="flex items-center gap-2">
+                  <MessageSquare className="w-5 h-5 text-amber-700" />
+                  <h2 className="text-base font-bold text-gray-900">Notas Contables</h2>
+                  <span className="text-xs text-gray-400">{notes.length} nota{notes.length !== 1 ? 's' : ''}</span>
+                  {/* Legend */}
+                  <div className="ml-auto flex items-center gap-3 text-[10px]">
+                    <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">FC Compra</span>
+                    <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">CC Contable</span>
+                    <span className="px-1.5 py-0.5 rounded bg-violet-100 text-violet-700">AC Cierre</span>
+                    <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">42 Ingresos</span>
+                    <span className="px-1.5 py-0.5 rounded bg-orange-100 text-orange-700">51 Gastos Admin</span>
                   </div>
-                ))}
+                </div>
+
+                {sortedGroups.map(([code, groupNotes]) => {
+                  const colors = accountColor(code);
+                  const totalAmount = groupNotes.reduce((s, n) => s + (n.amount || 0), 0);
+                  return (
+                    <div key={code} className={`rounded-xl border ${colors.border} overflow-hidden`}>
+                      <div className={`px-4 py-2.5 ${colors.bg} border-b ${colors.border} flex items-center justify-between`}>
+                        <div className="flex items-center gap-2">
+                          <span className={`text-xs font-mono font-bold ${colors.header}`}>{code}</span>
+                          <span className={`text-xs font-medium ${colors.header}`}>{accountName(code)}</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${colors.badge}`}>{groupNotes.length}</span>
+                        </div>
+                        <span className={`text-sm font-semibold ${colors.header}`}>{formatCurrency(totalAmount)}</span>
+                      </div>
+                      <div className="divide-y divide-gray-100 bg-white">
+                        {groupNotes.map((n) => {
+                          const badge = docBadge(n.invoice_number);
+                          return (
+                            <div key={n.id} className="px-4 py-2.5 hover:bg-gray-50/50 group flex items-start gap-3">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                                  <span className="text-xs text-amber-700 font-medium">{monthLabel(n.month)}</span>
+                                  {badge && (
+                                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${badge.cls}`}>
+                                      {badge.label}
+                                    </span>
+                                  )}
+                                  {n.supplier && (
+                                    <span className="text-xs font-medium text-gray-600">{n.supplier}</span>
+                                  )}
+                                  {n.amount && (
+                                    <span className="text-xs font-bold text-gray-800">{formatCurrency(n.amount)}</span>
+                                  )}
+                                </div>
+                                <p className="text-xs text-gray-600 leading-relaxed">{n.note}</p>
+                              </div>
+                              <button
+                                onClick={() => deleteNote(n.id)}
+                                className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-500 transition-all shrink-0"
+                                title="Eliminar nota"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* Annual Verification */}
           {data.annual_verification && (
