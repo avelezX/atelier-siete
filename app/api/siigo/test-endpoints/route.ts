@@ -27,146 +27,110 @@ async function fetchAllRows(
 
 export async function GET() {
   try {
-    // 1. Get journal name prefixes (document types) and their counts
+    // === Investigate 5145 (Mantenimiento) for October 2025 ===
+
+    // 1. Journals with 5145% items in Oct 2025
     const journals = await fetchAllRows('journals', 'id, name, date');
-    const journalPrefixes = new Map<string, number>();
-    const journalDateMap = new Map<string, string>();
-    journals.forEach((j) => {
-      const name = (j.name as string) || '';
-      const prefix = name.split('-')[0] || 'unknown';
-      journalPrefixes.set(prefix, (journalPrefixes.get(prefix) || 0) + 1);
-      journalDateMap.set(j.id as string, (j.date as string) || '');
-    });
+    const oct2025Journals = journals.filter(j => (j.date as string)?.startsWith('2025-10'));
+    const octJournalIds = new Set(oct2025Journals.map(j => j.id as string));
 
-    // 2. Get ALL journal_items with 51% accounts (both Debit and Credit)
-    const items51 = await fetchAllRows(
+    const items5145 = await fetchAllRows(
       'journal_items',
-      'account_code, movement, value, journal_id',
-      (q) => q.like('account_code', '51%')
+      'account_code, movement, value, journal_id, description',
+      (q) => q.like('account_code', '5145%')
     );
 
-    // Group by journal name prefix to see which doc types contribute to 51xx
-    const items51ByDocType = new Map<string, { debit: number; credit: number; count: number }>();
-    items51.forEach((item) => {
-      const journalId = item.journal_id as string;
-      const journalName = journals.find(j => j.id === journalId)?.name as string || '';
-      const prefix = journalName.split('-')[0] || 'unknown';
-      if (!items51ByDocType.has(prefix)) items51ByDocType.set(prefix, { debit: 0, credit: 0, count: 0 });
-      const entry = items51ByDocType.get(prefix)!;
-      entry.count++;
-      const val = Number(item.value) || 0;
-      if (item.movement === 'Debit') entry.debit += val;
-      else entry.credit += val;
-    });
+    const oct5145FromJournals = items5145
+      .filter(i => octJournalIds.has(i.journal_id as string))
+      .map(i => {
+        const journal = oct2025Journals.find(j => j.id === i.journal_id);
+        return {
+          source: 'CC',
+          journal_name: (journal?.name as string) || '',
+          journal_date: (journal?.date as string) || '',
+          account_code: i.account_code as string,
+          movement: i.movement as string,
+          value: Number(i.value) || 0,
+          description: (i.description as string) || '',
+        };
+      })
+      .sort((a, b) => b.value - a.value);
 
-    // 3. Get ALL journal_items with 53% accounts (financieros)
-    const items53 = await fetchAllRows(
-      'journal_items',
-      'account_code, movement, value, journal_id',
-      (q) => q.like('account_code', '53%')
-    );
-    const items53ByDocType = new Map<string, { debit: number; credit: number; count: number }>();
-    items53.forEach((item) => {
-      const journalId = item.journal_id as string;
-      const journalName = journals.find(j => j.id === journalId)?.name as string || '';
-      const prefix = journalName.split('-')[0] || 'unknown';
-      if (!items53ByDocType.has(prefix)) items53ByDocType.set(prefix, { debit: 0, credit: 0, count: 0 });
-      const entry = items53ByDocType.get(prefix)!;
-      entry.count++;
-      const val = Number(item.value) || 0;
-      if (item.movement === 'Debit') entry.debit += val;
-      else entry.credit += val;
-    });
+    // 2. Purchase items with 5145% in Oct 2025
+    const purchases = await fetchAllRows('purchases', 'id, date, name, supplier_name');
+    const oct2025Purchases = purchases.filter(p => (p.date as string)?.startsWith('2025-10'));
+    const octPurchaseIds = new Set(oct2025Purchases.map(p => p.id as string));
 
-    // 4. Get ALL journal_items with 6135% accounts (COGS)
-    const items6135 = await fetchAllRows(
-      'journal_items',
-      'account_code, movement, value, journal_id',
-      (q) => q.like('account_code', '6135%')
-    );
-    const items6135ByDocType = new Map<string, { debit: number; credit: number; count: number }>();
-    items6135.forEach((item) => {
-      const journalId = item.journal_id as string;
-      const journalName = journals.find(j => j.id === journalId)?.name as string || '';
-      const prefix = journalName.split('-')[0] || 'unknown';
-      if (!items6135ByDocType.has(prefix)) items6135ByDocType.set(prefix, { debit: 0, credit: 0, count: 0 });
-      const entry = items6135ByDocType.get(prefix)!;
-      entry.count++;
-      const val = Number(item.value) || 0;
-      if (item.movement === 'Debit') entry.debit += val;
-      else entry.credit += val;
-    });
-
-    // 5. Check purchase_items for overlapping 51% accounts
-    const purchaseItems51 = await fetchAllRows(
+    const purchaseItems5145 = await fetchAllRows(
       'purchase_items',
-      'account_code, price, quantity, purchase_id'  ,
-      (q) => q.like('account_code', '51%')
+      'account_code, price, quantity, purchase_id, description',
+      (q) => q.like('account_code', '5145%')
     );
-    // Group by 4-digit prefix
-    const purchaseItems51By4 = new Map<string, { count: number; total: number }>();
-    purchaseItems51.forEach((item) => {
-      const code4 = ((item.account_code as string) || '').substring(0, 4);
-      if (!purchaseItems51By4.has(code4)) purchaseItems51By4.set(code4, { count: 0, total: 0 });
-      const entry = purchaseItems51By4.get(code4)!;
-      entry.count++;
-      entry.total += (Number(item.price) || 0) * (Number(item.quantity) || 1);
+
+    const oct5145FromPurchases = purchaseItems5145
+      .filter(i => octPurchaseIds.has(i.purchase_id as string))
+      .map(i => {
+        const purchase = oct2025Purchases.find(p => p.id === i.purchase_id);
+        return {
+          source: 'FC',
+          purchase_name: (purchase?.name as string) || '',
+          purchase_date: (purchase?.date as string) || '',
+          supplier: (purchase?.supplier_name as string) || '',
+          account_code: i.account_code as string,
+          price: Number(i.price) || 0,
+          quantity: Number(i.quantity) || 1,
+          total: (Number(i.price) || 0) * (Number(i.quantity) || 1),
+          description: (i.description as string) || '',
+        };
+      })
+      .sort((a, b) => b.total - a.total);
+
+    // 3. Also get ALL 5145 items across all months for context
+    const all5145ByMonth = new Map<string, { cc_debit: number; cc_credit: number; fc_total: number }>();
+    items5145.forEach(i => {
+      const journalDate = journals.find(j => j.id === i.journal_id)?.date as string;
+      const month = journalDate?.substring(0, 7);
+      if (!month) return;
+      if (!all5145ByMonth.has(month)) all5145ByMonth.set(month, { cc_debit: 0, cc_credit: 0, fc_total: 0 });
+      const entry = all5145ByMonth.get(month)!;
+      const val = Number(i.value) || 0;
+      if (i.movement === 'Debit') entry.cc_debit += val;
+      else entry.cc_credit += val;
     });
-
-    // 6. Check: Are journal_items from CC journals duplicating purchase_items?
-    // Look at January 2025 specifically
-    const jan2025Journals = journals.filter(j => (j.date as string)?.startsWith('2025-01'));
-    const jan2025JournalIds = new Set(jan2025Journals.map(j => j.id as string));
-
-    const jan51FromJournals = items51.filter(i => jan2025JournalIds.has(i.journal_id as string));
-    const jan51Debit = jan51FromJournals.filter(i => i.movement === 'Debit').reduce((s, i) => s + (Number(i.value) || 0), 0);
-    const jan51Credit = jan51FromJournals.filter(i => i.movement === 'Credit').reduce((s, i) => s + (Number(i.value) || 0), 0);
-
-    const purchases = await fetchAllRows('purchases', 'id, date');
-    const jan2025Purchases = purchases.filter(p => (p.date as string)?.startsWith('2025-01'));
-    const jan2025PurchaseIds = new Set(jan2025Purchases.map(p => p.id as string));
-    const janPurchase51 = purchaseItems51.filter(i => jan2025PurchaseIds.has(i.purchase_id as string));
-    const janPurchase51Total = janPurchase51.reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.quantity) || 1), 0);
-
-    // 7. Total journal_items count
-    const totalItems = await fetchAllRows('journal_items', 'id', (q) => q);
+    purchaseItems5145.forEach(i => {
+      const purchaseDate = purchases.find(p => p.id === i.purchase_id)?.date as string;
+      const month = purchaseDate?.substring(0, 7);
+      if (!month) return;
+      if (!all5145ByMonth.has(month)) all5145ByMonth.set(month, { cc_debit: 0, cc_credit: 0, fc_total: 0 });
+      const entry = all5145ByMonth.get(month)!;
+      entry.fc_total += (Number(i.price) || 0) * (Number(i.quantity) || 1);
+    });
 
     return NextResponse.json({
-      journal_count: journals.length,
-      journal_item_count: totalItems.length,
-      journal_doc_types: Object.fromEntries(
-        Array.from(journalPrefixes.entries()).sort((a, b) => b[1] - a[1])
-      ),
-      admin_51_by_doc_type: Object.fromEntries(
-        Array.from(items51ByDocType.entries())
-          .sort((a, b) => b[1].debit - a[1].debit)
-          .map(([k, v]) => [k, { count: v.count, debit: Math.round(v.debit), credit: Math.round(v.credit) }])
-      ),
-      financieros_53_by_doc_type: Object.fromEntries(
-        Array.from(items53ByDocType.entries())
-          .sort((a, b) => b[1].debit - a[1].debit)
-          .map(([k, v]) => [k, { count: v.count, debit: Math.round(v.debit), credit: Math.round(v.credit) }])
-      ),
-      cogs_6135_by_doc_type: Object.fromEntries(
-        Array.from(items6135ByDocType.entries())
-          .sort((a, b) => b[1].debit - a[1].debit)
-          .map(([k, v]) => [k, { count: v.count, debit: Math.round(v.debit), credit: Math.round(v.credit) }])
-      ),
-      purchase_items_51_by_subcat: Object.fromEntries(
-        Array.from(purchaseItems51By4.entries())
-          .sort((a, b) => b[1].total - a[1].total)
-          .map(([k, v]) => [k, { count: v.count, total: Math.round(v.total) }])
-      ),
-      january_2025_detail: {
-        journals_count: jan2025Journals.length,
-        journal_51_items: jan51FromJournals.length,
-        journal_51_debit: Math.round(jan51Debit),
-        journal_51_credit: Math.round(jan51Credit),
-        purchases_count: jan2025Purchases.length,
-        purchase_51_items: janPurchase51.length,
-        purchase_51_total: Math.round(janPurchase51Total),
-        combined_51: Math.round(jan51Debit + janPurchase51Total),
+      investigation: '5145 Mantenimiento - Octubre 2025',
+      oct_2025: {
+        journals_count: oct2025Journals.length,
+        purchases_count: oct2025Purchases.length,
+        cc_items: oct5145FromJournals,
+        cc_total_debit: Math.round(oct5145FromJournals.filter(i => i.movement === 'Debit').reduce((s, i) => s + i.value, 0)),
+        cc_total_credit: Math.round(oct5145FromJournals.filter(i => i.movement === 'Credit').reduce((s, i) => s + i.value, 0)),
+        fc_items: oct5145FromPurchases,
+        fc_total: Math.round(oct5145FromPurchases.reduce((s, i) => s + i.total, 0)),
+        grand_total: Math.round(
+          oct5145FromJournals.filter(i => i.movement === 'Debit').reduce((s, i) => s + i.value, 0) +
+          oct5145FromPurchases.reduce((s, i) => s + i.total, 0)
+        ),
       },
+      monthly_summary_5145: Object.fromEntries(
+        Array.from(all5145ByMonth.entries())
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([month, data]) => [month, {
+            cc_debit: Math.round(data.cc_debit),
+            cc_credit: Math.round(data.cc_credit),
+            fc_total: Math.round(data.fc_total),
+            net: Math.round(data.cc_debit - data.cc_credit + data.fc_total),
+          }])
+      ),
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
