@@ -270,6 +270,75 @@ export async function GET(req: NextRequest) {
         .sort((a, b) => b.net - a.net);
     };
 
+    // === ANNUAL VERIFICATION ===
+    // Fetch the annual BP (month 1-12) and compare using SAME leaf-only logic
+    let annualVerification: Record<string, unknown> | undefined;
+    try {
+      const annualReport = await fetchTestBalanceReport(year, 1, 12);
+      if (annualReport.file_url) {
+        const annualAccounts = await parseBalanceExcel(annualReport.file_url);
+        const aRev41 = aggregateLeaf(annualAccounts, '41');
+        const aRev42 = aggregateLeaf(annualAccounts, '42');
+        const aCogs61 = aggregateLeaf(annualAccounts, '61');
+        const aExp51 = aggregateLeaf(annualAccounts, '51');
+        const aExp52 = aggregateLeaf(annualAccounts, '52');
+        const aExp53 = aggregateLeaf(annualAccounts, '53');
+
+        const annualData = {
+          ventas_brutas: Math.round(aRev41.credit),
+          devoluciones: Math.round(aRev41.debit),
+          ventas_netas: Math.round(aRev41.credit - aRev41.debit),
+          otros_ingresos: Math.round(aRev42.credit - aRev42.debit),
+          costo_ventas: Math.round(aCogs61.net),
+          gastos_admin: Math.round(aExp51.net),
+          gastos_venta: Math.round(aExp52.net),
+          gastos_financieros: Math.round(aExp53.net),
+          total_gastos: Math.round(aExp51.net + aExp52.net + aExp53.net),
+          utilidad_bruta: Math.round((aRev41.credit - aRev41.debit) - aCogs61.net),
+          utilidad_operativa: Math.round((aRev41.credit - aRev41.debit) - aCogs61.net - aExp51.net - aExp52.net - aExp53.net),
+          accounts_parsed: annualAccounts.length,
+        };
+
+        // How many accounts per prefix in the annual BP
+        const accountCounts: Record<string, { total: number; leaves: number }> = {};
+        for (const prefix of ['41', '42', '51', '52', '53', '61']) {
+          const matching = annualAccounts.filter(a => a.code.startsWith(prefix));
+          const leaves = matching.filter(acc => !matching.some(other => other.code !== acc.code && other.code.startsWith(acc.code)));
+          accountCounts[prefix] = { total: matching.length, leaves: leaves.length };
+        }
+
+        annualVerification = {
+          annual_bp: annualData,
+          monthly_sum: {
+            ventas_brutas: totals.ventas_brutas,
+            devoluciones: totals.devoluciones,
+            ventas_netas: totals.ventas_netas,
+            otros_ingresos: totals.otros_ingresos,
+            costo_ventas: totals.costo_ventas,
+            gastos_admin: totals.gastos_admin,
+            gastos_venta: totals.gastos_venta,
+            gastos_financieros: totals.gastos_financieros,
+            total_gastos: totals.total_gastos,
+            utilidad_bruta: totals.utilidad_bruta,
+            utilidad_operativa: totals.utilidad_operativa,
+          },
+          diff: {
+            ventas_brutas: Math.round(totals.ventas_brutas - annualData.ventas_brutas),
+            devoluciones: Math.round(totals.devoluciones - annualData.devoluciones),
+            ventas_netas: Math.round(totals.ventas_netas - annualData.ventas_netas),
+            costo_ventas: Math.round(totals.costo_ventas - annualData.costo_ventas),
+            gastos_admin: Math.round(totals.gastos_admin - annualData.gastos_admin),
+            gastos_venta: Math.round(totals.gastos_venta - annualData.gastos_venta),
+            gastos_financieros: Math.round(totals.gastos_financieros - annualData.gastos_financieros),
+            utilidad_operativa: Math.round(totals.utilidad_operativa - annualData.utilidad_operativa),
+          },
+          account_counts: accountCounts,
+        };
+      }
+    } catch (e: unknown) {
+      errors.push(`Verificación anual: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
     return NextResponse.json({
       year,
       source: 'Balance de Prueba Siigo',
@@ -282,6 +351,7 @@ export async function GET(req: NextRequest) {
         '53': allSubcats('53'),
         '61': allSubcats('61'),
       },
+      annual_verification: annualVerification,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);

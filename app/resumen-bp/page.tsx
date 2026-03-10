@@ -54,6 +54,13 @@ interface Totals {
   utilidad_operativa: number;
 }
 
+interface AnnualVerification {
+  annual_bp: Record<string, number>;
+  monthly_sum: Record<string, number>;
+  diff: Record<string, number>;
+  account_counts: Record<string, { total: number; leaves: number }>;
+}
+
 interface ResumenBPData {
   year: number;
   source: string;
@@ -61,6 +68,7 @@ interface ResumenBPData {
   months: MonthPyG[];
   totals: Totals;
   subcats_totals: Record<string, SubcatItem[]>;
+  annual_verification?: AnnualVerification;
 }
 
 function monthLabel(yyyymm: string): string {
@@ -371,6 +379,84 @@ export default function ResumenBPPage() {
               </table>
             </div>
           </div>
+
+          {/* Annual Verification */}
+          {data.annual_verification && (
+            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden mb-6">
+              <div className="px-4 py-3 bg-gray-50 border-b border-gray-200">
+                <h2 className="text-sm font-semibold text-gray-700">
+                  Verificacion: Suma Mensual vs Balance de Prueba Anual
+                </h2>
+                <p className="text-xs text-gray-400">
+                  Compara la suma de 12 reportes mensuales contra un solo reporte anual (Ene-Dic)
+                </p>
+              </div>
+              <div className="p-4">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-200 text-xs text-gray-500 uppercase">
+                        <th className="text-left px-3 py-2">Concepto</th>
+                        <th className="text-right px-3 py-2">Suma Mensual</th>
+                        <th className="text-right px-3 py-2">BP Anual</th>
+                        <th className="text-right px-3 py-2">Diferencia</th>
+                        <th className="text-center px-3 py-2">Estado</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[
+                        { key: 'ventas_brutas', label: 'Ventas Brutas (41 Cr)' },
+                        { key: 'devoluciones', label: 'Devoluciones (41 Db)' },
+                        { key: 'ventas_netas', label: 'Ventas Netas' },
+                        { key: 'costo_ventas', label: 'Costo de Ventas (61)' },
+                        { key: 'gastos_admin', label: 'Gastos Admin (51)' },
+                        { key: 'gastos_venta', label: 'Gastos Venta (52)' },
+                        { key: 'gastos_financieros', label: 'Gastos Financieros (53)' },
+                        { key: 'utilidad_operativa', label: 'Utilidad Operativa' },
+                      ].map(({ key, label }) => {
+                        const monthly = data.annual_verification!.monthly_sum[key] || 0;
+                        const annual = data.annual_verification!.annual_bp[key] || 0;
+                        const diff = data.annual_verification!.diff[key] || 0;
+                        const pctDiff = annual !== 0 ? Math.abs(diff / annual) * 100 : 0;
+                        const isOk = pctDiff < 1;
+                        return (
+                          <tr key={key} className="border-b border-gray-100 hover:bg-gray-50">
+                            <td className="px-3 py-2 font-medium text-gray-700">{label}</td>
+                            <td className="px-3 py-2 text-right font-mono">{formatCurrency(monthly)}</td>
+                            <td className="px-3 py-2 text-right font-mono">{formatCurrency(annual)}</td>
+                            <td className={`px-3 py-2 text-right font-mono ${isOk ? 'text-green-600' : 'text-red-600'}`}>
+                              {diff > 0 ? '+' : ''}{formatCurrency(diff)}
+                            </td>
+                            <td className="px-3 py-2 text-center">
+                              {isOk ? (
+                                <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">OK</span>
+                              ) : (
+                                <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700">
+                                  {pctDiff.toFixed(1)}%
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Account counts */}
+                <div className="mt-3 pt-3 border-t border-gray-200">
+                  <p className="text-xs text-gray-500 mb-2">Cuentas en BP anual (total / hojas):</p>
+                  <div className="flex gap-4 text-xs">
+                    {Object.entries(data.annual_verification.account_counts).map(([prefix, counts]) => (
+                      <span key={prefix} className="bg-gray-100 px-2 py-1 rounded font-mono">
+                        {prefix}: {counts.total} total, {counts.leaves} hojas
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Source note */}
           <div className="bg-green-50 border border-green-200 rounded-xl p-4">
