@@ -81,66 +81,10 @@ export async function GET() {
       })
       .sort((a, b) => b.total - a.total);
 
-    // Invoices (FV) — credit notes that might hit 42xx
-    const invoices = await fetchAllRows('invoices', 'id, date, name, customer_name');
-    const invoices2025 = invoices.filter(inv => (inv.date as string)?.startsWith('2025'));
-    const invoiceIds2025 = new Set(invoices2025.map(inv => inv.id as string));
-
-    const invoiceItems42 = await fetchAllRows(
-      'invoice_items',
-      'account_code, price, quantity, invoice_id, description',
-      (q) => q.like('account_code', '42%')
-    );
-
-    const fvItems = invoiceItems42
-      .filter(i => invoiceIds2025.has(i.invoice_id as string))
-      .map(i => {
-        const inv = invoices2025.find(x => x.id === i.invoice_id);
-        return {
-          source: 'FV',
-          doc: (inv?.name as string) || '',
-          date: (inv?.date as string) || '',
-          customer: (inv?.customer_name as string) || '',
-          account_code: i.account_code as string,
-          total: (Number(i.price) || 0) * (Number(i.quantity) || 1),
-          description: (i.description as string) || '',
-        };
-      })
-      .sort((a, b) => b.total - a.total);
-
-    // Credit notes (NC)
-    const creditNotes = await fetchAllRows('credit_notes', 'id, date, name, customer_name');
-    const cn2025 = creditNotes.filter(cn => (cn.date as string)?.startsWith('2025'));
-    const cnIds2025 = new Set(cn2025.map(cn => cn.id as string));
-
-    const cnItems42 = await fetchAllRows(
-      'credit_note_items',
-      'account_code, price, quantity, credit_note_id, description',
-      (q) => q.like('account_code', '42%')
-    );
-
-    const ncItems = cnItems42
-      .filter(i => cnIds2025.has(i.credit_note_id as string))
-      .map(i => {
-        const cn = cn2025.find(x => x.id === i.credit_note_id);
-        return {
-          source: 'NC',
-          doc: (cn?.name as string) || '',
-          date: (cn?.date as string) || '',
-          customer: (cn?.customer_name as string) || '',
-          account_code: i.account_code as string,
-          total: (Number(i.price) || 0) * (Number(i.quantity) || 1),
-          description: (i.description as string) || '',
-        };
-      })
-      .sort((a, b) => b.total - a.total);
-
     // Summary
     const ccCredit = ccItems.filter(i => i.movement === 'Credit').reduce((s, i) => s + i.value, 0);
     const ccDebit = ccItems.filter(i => i.movement === 'Debit').reduce((s, i) => s + i.value, 0);
     const fcTotal = fcItems.reduce((s, i) => s + i.total, 0);
-    const fvTotal = fvItems.reduce((s, i) => s + i.total, 0);
-    const ncTotal = ncItems.reduce((s, i) => s + i.total, 0);
 
     return NextResponse.json({
       investigation: 'Otros Ingresos (42) — 2025 completo desde DB',
@@ -148,19 +92,13 @@ export async function GET() {
         cc_credit: Math.round(ccCredit),
         cc_debit: Math.round(ccDebit),
         fc_total: Math.round(fcTotal),
-        fv_total: Math.round(fvTotal),
-        nc_total: Math.round(ncTotal),
-        db_net: Math.round(ccCredit - ccDebit + fvTotal - ncTotal - fcTotal),
+        db_net: Math.round(ccCredit - ccDebit - fcTotal),
         bp_total: 24772880,
       },
       cc_items: ccItems,
       cc_count: ccItems.length,
       fc_items: fcItems,
       fc_count: fcItems.length,
-      fv_items: fvItems,
-      fv_count: fvItems.length,
-      nc_items: ncItems,
-      nc_count: ncItems.length,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
