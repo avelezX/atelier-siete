@@ -46,32 +46,50 @@ export async function GET() {
   try {
     const token = await getToken();
 
-    // Fetch a single voucher to see item structure
-    const voucherRes = await fetch(`${SIIGO_API_URL}/v1/vouchers?page=1&page_size=2`, {
-      headers: {
-        'Authorization': token,
-        'Content-Type': 'application/json',
-        'Partner-Id': 'atelierSiete',
-      },
-    });
-    const voucherData = await voucherRes.json();
-    const sampleVouchers = (voucherData.results || []).slice(0, 2);
+    // Check total counts
+    const headers = {
+      'Authorization': token,
+      'Content-Type': 'application/json',
+      'Partner-Id': 'atelierSiete',
+    };
 
-    // Also fetch a journal for comparison
-    const journalRes = await fetch(`${SIIGO_API_URL}/v1/journals?page=1&page_size=1`, {
-      headers: {
-        'Authorization': token,
-        'Content-Type': 'application/json',
-        'Partner-Id': 'atelierSiete',
-      },
-    });
+    // Total journals
+    const journalRes = await fetch(`${SIIGO_API_URL}/v1/journals?page=1&page_size=1`, { headers });
     const journalData = await journalRes.json();
-    const sampleJournal = (journalData.results || [])[0];
+
+    // Total vouchers
+    const voucherRes = await fetch(`${SIIGO_API_URL}/v1/vouchers?page=1&page_size=1`, { headers });
+    const voucherData = await voucherRes.json();
+
+    // Total purchases
+    const purchaseRes = await fetch(`${SIIGO_API_URL}/v1/purchases?page=1&page_size=1`, { headers });
+    const purchaseData = await purchaseRes.json();
+
+    // Fetch a journal with expense items (5xxx) to verify structure
+    // Try fetching more journals to find one with expense items
+    const journalsP2 = await fetch(`${SIIGO_API_URL}/v1/journals?page=1&page_size=5`, { headers });
+    const journalsData2 = await journalsP2.json();
+    const sampleJournals = (journalsData2.results || []).slice(0, 3);
+
+    // Find all unique document.id values across sample journals
+    const docIds = sampleJournals.map((j: any) => ({
+      name: j.name,
+      document_id: j.document?.id,
+      items_count: j.items?.length || 0,
+      sample_accounts: (j.items || []).slice(0, 3).map((i: any) => ({
+        code: i.account?.code,
+        movement: i.account?.movement,
+        value: i.value,
+      })),
+    }));
 
     return NextResponse.json({
-      voucher_total: voucherData.pagination?.total_results,
-      sample_vouchers: sampleVouchers,
-      sample_journal: sampleJournal,
+      totals: {
+        journals: journalData.pagination?.total_results,
+        vouchers: voucherData.pagination?.total_results,
+        purchases: purchaseData.pagination?.total_results,
+      },
+      sample_journals: docIds,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
