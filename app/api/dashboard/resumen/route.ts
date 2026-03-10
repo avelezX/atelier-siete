@@ -179,6 +179,28 @@ export async function GET(request: NextRequest) {
       (q) => q.like('account_code', '5%')
     );
 
+    // 8. Fetch vouchers (recibos de caja) for expenses
+    const vouchersAll = await fetchAllRows('vouchers', 'id, date, name');
+    const voucherDateMap = new Map<string, string>();
+    const voucherNameMap = new Map<string, string>();
+    vouchersAll.forEach((v) => {
+      voucherDateMap.set(v.id as string, (v.date as string) || '');
+      voucherNameMap.set(v.id as string, (v.name as string) || '');
+    });
+
+    // 9. Fetch voucher items for expenses (5%) and COGS (6135%)
+    const gastosVoucher = await fetchAllRows(
+      'voucher_items',
+      'account_code, movement, value, voucher_id, description',
+      (q) => q.like('account_code', '5%').eq('movement', 'Debit')
+    );
+
+    const cogsVoucher = await fetchAllRows(
+      'voucher_items',
+      'account_code, movement, value, voucher_id, description',
+      (q) => q.like('account_code', '6135%').eq('movement', 'Debit')
+    );
+
     // 10. Fetch invoice items for revenue by supplier
     const invoiceItems = await fetchAllRows(
       'invoice_items',
@@ -237,11 +259,17 @@ export async function GET(request: NextRequest) {
       cnByMonth.set(month, curr);
     });
 
-    // --- Group COGS by month (from journals) ---
+    // --- Group COGS by month (from journals + vouchers) ---
     const cogsByMonth = new Map<string, number>();
     costoVentas.forEach((item) => {
       const journalDate = journalDateMap.get(item.journal_id as string);
       const month = journalDate?.substring(0, 7);
+      if (!month) return;
+      cogsByMonth.set(month, (cogsByMonth.get(month) || 0) + (Number(item.value) || 0));
+    });
+    cogsVoucher.forEach((item) => {
+      const date = voucherDateMap.get(item.voucher_id as string);
+      const month = date?.substring(0, 7);
       if (!month) return;
       cogsByMonth.set(month, (cogsByMonth.get(month) || 0) + (Number(item.value) || 0));
     });
@@ -302,6 +330,26 @@ export async function GET(request: NextRequest) {
         date: purchaseDate || '',
         description: (item.description as string) || '',
         supplier_name: purchaseSupplierMap.get(item.purchase_id as string) || null,
+      });
+    });
+
+    // From voucher items (RC — recibos de caja)
+    gastosVoucher.forEach((item) => {
+      const voucherDate = voucherDateMap.get(item.voucher_id as string);
+      const month = voucherDate?.substring(0, 7);
+      if (!month) return;
+      const rcValue = Number(item.value) || 0;
+      allExpenses.push({
+        month,
+        account_code: item.account_code as string,
+        value: rcValue,
+        tax_value: 0,
+        base_value: rcValue,
+        source: 'CC' as const, // Treat vouchers like CC for display purposes
+        document_name: voucherNameMap.get(item.voucher_id as string) || '',
+        date: voucherDate || '',
+        description: (item.description as string) || '',
+        supplier_name: null,
       });
     });
 
@@ -727,9 +775,12 @@ export async function GET(request: NextRequest) {
         credit_notes: creditNotes.length,
         journals: journals.length,
         purchases: purchases.length,
-        cogs_items: costoVentas.length,
+        cogs_items_journal: costoVentas.length,
+        cogs_items_voucher: cogsVoucher.length,
         expense_items_journal: gastosJournal.length,
         expense_items_purchase: gastosPurchase.length,
+        expense_items_voucher: gastosVoucher.length,
+        vouchers: vouchersAll.length,
         iva_purchases_with_tax: purchases.filter((p) => (Number(p.tax_amount) || 0) > 0).length,
         invoice_items: invoiceItems.length,
         products: products.length,
