@@ -1,141 +1,166 @@
 import { NextResponse } from 'next/server';
-import { fetchTestBalanceReport } from '@/lib/siigo';
-import * as XLSX from 'xlsx';
+import { atelierTableAdmin } from '@/lib/supabase';
 
-export const maxDuration = 120;
+export const maxDuration = 60;
 
-interface BPAccount {
-  code: string;
-  name: string;
-  saldo_inicial: number;
-  mov_debit: number;
-  mov_credit: number;
-  saldo_final: number;
-}
-
-async function parseBalanceExcel(fileUrl: string): Promise<BPAccount[]> {
-  const fileRes = await fetch(fileUrl);
-  if (!fileRes.ok) throw new Error(`Download failed: ${fileRes.status}`);
-  const buffer = await fileRes.arrayBuffer();
-  const workbook = XLSX.read(buffer, { type: 'array' });
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const allRows: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
-
-  let headerRowIdx = -1, codeColIdx = 0, nameColIdx = 1, numsStartIdx = 2;
-  for (let i = 0; i < Math.min(allRows.length, 10); i++) {
-    const row = allRows[i] || [];
-    for (let col = 0; col < row.length; col++) {
-      const cell = String(row[col] || '').toLowerCase();
-      if (cell.includes('código cuenta') || cell.includes('codigo cuenta') || cell === 'código' || cell === 'codigo') {
-        headerRowIdx = i; codeColIdx = col; nameColIdx = col + 1; numsStartIdx = col + 2; break;
-      }
-    }
-    if (headerRowIdx < 0) {
-      const firstCell = String(row[0] || '').toLowerCase();
-      if (firstCell === 'nivel') { headerRowIdx = i; codeColIdx = 2; nameColIdx = 3; numsStartIdx = 4; }
-    }
-    if (headerRowIdx >= 0) break;
+async function fetchAllRows(
+  table: string, select: string,
+  applyFilters?: (query: ReturnType<typeof atelierTableAdmin>) => ReturnType<typeof atelierTableAdmin>
+) {
+  const PAGE_SIZE = 1000;
+  let allData: Record<string, unknown>[] = [];
+  let from = 0;
+  while (true) {
+    let query = atelierTableAdmin(table).select(select).range(from, from + PAGE_SIZE - 1);
+    if (applyFilters) query = applyFilters(query);
+    const { data, error } = await query;
+    if (error) throw new Error(`${table}: ${error.message}`);
+    if (!data || data.length === 0) break;
+    allData = allData.concat(data);
+    if (data.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
   }
-
-  const accounts: BPAccount[] = [];
-  for (let i = (headerRowIdx >= 0 ? headerRowIdx + 1 : 0); i < allRows.length; i++) {
-    const row = allRows[i] || [];
-    const code = String(row[codeColIdx] || '').trim();
-    if (!code || !/^\d{1,8}$/.test(code)) continue;
-    const nums = row.slice(numsStartIdx).map((v) => { const n = Number(v); return isNaN(n) ? 0 : n; });
-    accounts.push({
-      code, name: String(row[nameColIdx] || '').trim(),
-      saldo_inicial: nums[0] || 0, mov_debit: nums[1] || 0, mov_credit: nums[2] || 0, saldo_final: nums[3] || 0,
-    });
-  }
-  return accounts;
-}
-
-function investigatePrefix(allAccounts: BPAccount[], prefix: string) {
-  const targetAccounts = allAccounts
-    .filter(a => a.code.startsWith(prefix))
-    .sort((a, b) => a.code.localeCompare(b.code));
-
-  const leafAccounts = targetAccounts.filter(acc =>
-    !targetAccounts.some(other => other.code !== acc.code && other.code.startsWith(acc.code))
-  );
-
-  const parentAccount = allAccounts.find(a => a.code === prefix);
-
-  return {
-    parent: parentAccount ? {
-      code: parentAccount.code,
-      name: parentAccount.name,
-      mov_debit: Math.round(parentAccount.mov_debit),
-      mov_credit: Math.round(parentAccount.mov_credit),
-      net_credit: Math.round(parentAccount.mov_credit - parentAccount.mov_debit),
-    } : null,
-    all_accounts: targetAccounts.map(a => ({
-      code: a.code,
-      name: a.name,
-      saldo_inicial: Math.round(a.saldo_inicial),
-      mov_debit: Math.round(a.mov_debit),
-      mov_credit: Math.round(a.mov_credit),
-      saldo_final: Math.round(a.saldo_final),
-      net_credit: Math.round(a.mov_credit - a.mov_debit),
-      is_leaf: leafAccounts.some(l => l.code === a.code),
-    })),
-    leaf_summary: {
-      count: leafAccounts.length,
-      total_debit: Math.round(leafAccounts.reduce((s, a) => s + a.mov_debit, 0)),
-      total_credit: Math.round(leafAccounts.reduce((s, a) => s + a.mov_credit, 0)),
-      net_credit: Math.round(leafAccounts.reduce((s, a) => s + (a.mov_credit - a.mov_debit), 0)),
-    },
-    top_items: leafAccounts
-      .filter(a => a.mov_debit > 0 || a.mov_credit > 0)
-      .sort((a, b) => (b.mov_credit - b.mov_debit) - (a.mov_credit - a.mov_debit))
-      .map(a => ({
-        code: a.code,
-        name: a.name,
-        mov_debit: Math.round(a.mov_debit),
-        mov_credit: Math.round(a.mov_credit),
-        net_credit: Math.round(a.mov_credit - a.mov_debit),
-      })),
-  };
+  return allData;
 }
 
 export async function GET() {
   try {
-    // Fetch annual BP for full year view of Otros Ingresos (42)
-    const annualReport = await fetchTestBalanceReport(2025, 1, 12);
-    if (!annualReport.file_url) {
-      return NextResponse.json({ error: 'No file_url from Siigo for annual 2025' }, { status: 500 });
-    }
-    const annualAccounts = await parseBalanceExcel(annualReport.file_url);
-    const annual42 = investigatePrefix(annualAccounts, '42');
+    // === Otros Ingresos (42) — Todo 2025 desde DB ===
 
-    // Also fetch monthly breakdown for months with activity
-    const monthlyDetail: Record<string, unknown> = {};
-    const monthsToCheck = [1, 3, 5, 7, 9, 10, 11, 12]; // months that show activity in the resumen
+    // Journals (CC)
+    const journals = await fetchAllRows('journals', 'id, name, date');
+    const journals2025 = journals.filter(j => (j.date as string)?.startsWith('2025'));
+    const journalIds2025 = new Set(journals2025.map(j => j.id as string));
 
-    for (const m of monthsToCheck) {
-      try {
-        const report = await fetchTestBalanceReport(2025, m, m);
-        if (report.file_url) {
-          const accounts = await parseBalanceExcel(report.file_url);
-          const detail = investigatePrefix(accounts, '42');
-          if (detail.leaf_summary.net_credit !== 0) {
-            monthlyDetail[`2025-${String(m).padStart(2, '0')}`] = {
-              net_credit: detail.leaf_summary.net_credit,
-              top_items: detail.top_items,
-            };
-          }
-        }
-      } catch {
-        // skip month
-      }
-      if (m < monthsToCheck[monthsToCheck.length - 1]) await new Promise(r => setTimeout(r, 500));
-    }
+    const journalItems42 = await fetchAllRows(
+      'journal_items',
+      'account_code, movement, value, journal_id, description',
+      (q) => q.like('account_code', '42%')
+    );
+
+    const ccItems = journalItems42
+      .filter(i => journalIds2025.has(i.journal_id as string))
+      .map(i => {
+        const j = journals2025.find(x => x.id === i.journal_id);
+        return {
+          source: 'CC',
+          doc: (j?.name as string) || '',
+          date: (j?.date as string) || '',
+          account_code: i.account_code as string,
+          movement: i.movement as string,
+          value: Number(i.value) || 0,
+          description: (i.description as string) || '',
+        };
+      })
+      .sort((a, b) => b.value - a.value);
+
+    // Purchases (FC)
+    const purchases = await fetchAllRows('purchases', 'id, date, name, supplier_name');
+    const purchases2025 = purchases.filter(p => (p.date as string)?.startsWith('2025'));
+    const purchaseIds2025 = new Set(purchases2025.map(p => p.id as string));
+
+    const purchaseItems42 = await fetchAllRows(
+      'purchase_items',
+      'account_code, price, quantity, purchase_id, description',
+      (q) => q.like('account_code', '42%')
+    );
+
+    const fcItems = purchaseItems42
+      .filter(i => purchaseIds2025.has(i.purchase_id as string))
+      .map(i => {
+        const p = purchases2025.find(x => x.id === i.purchase_id);
+        return {
+          source: 'FC',
+          doc: (p?.name as string) || '',
+          date: (p?.date as string) || '',
+          supplier: (p?.supplier_name as string) || '',
+          account_code: i.account_code as string,
+          total: (Number(i.price) || 0) * (Number(i.quantity) || 1),
+          description: (i.description as string) || '',
+        };
+      })
+      .sort((a, b) => b.total - a.total);
+
+    // Invoices (FV) — credit notes that might hit 42xx
+    const invoices = await fetchAllRows('invoices', 'id, date, name, customer_name');
+    const invoices2025 = invoices.filter(inv => (inv.date as string)?.startsWith('2025'));
+    const invoiceIds2025 = new Set(invoices2025.map(inv => inv.id as string));
+
+    const invoiceItems42 = await fetchAllRows(
+      'invoice_items',
+      'account_code, price, quantity, invoice_id, description',
+      (q) => q.like('account_code', '42%')
+    );
+
+    const fvItems = invoiceItems42
+      .filter(i => invoiceIds2025.has(i.invoice_id as string))
+      .map(i => {
+        const inv = invoices2025.find(x => x.id === i.invoice_id);
+        return {
+          source: 'FV',
+          doc: (inv?.name as string) || '',
+          date: (inv?.date as string) || '',
+          customer: (inv?.customer_name as string) || '',
+          account_code: i.account_code as string,
+          total: (Number(i.price) || 0) * (Number(i.quantity) || 1),
+          description: (i.description as string) || '',
+        };
+      })
+      .sort((a, b) => b.total - a.total);
+
+    // Credit notes (NC)
+    const creditNotes = await fetchAllRows('credit_notes', 'id, date, name, customer_name');
+    const cn2025 = creditNotes.filter(cn => (cn.date as string)?.startsWith('2025'));
+    const cnIds2025 = new Set(cn2025.map(cn => cn.id as string));
+
+    const cnItems42 = await fetchAllRows(
+      'credit_note_items',
+      'account_code, price, quantity, credit_note_id, description',
+      (q) => q.like('account_code', '42%')
+    );
+
+    const ncItems = cnItems42
+      .filter(i => cnIds2025.has(i.credit_note_id as string))
+      .map(i => {
+        const cn = cn2025.find(x => x.id === i.credit_note_id);
+        return {
+          source: 'NC',
+          doc: (cn?.name as string) || '',
+          date: (cn?.date as string) || '',
+          customer: (cn?.customer_name as string) || '',
+          account_code: i.account_code as string,
+          total: (Number(i.price) || 0) * (Number(i.quantity) || 1),
+          description: (i.description as string) || '',
+        };
+      })
+      .sort((a, b) => b.total - a.total);
+
+    // Summary
+    const ccCredit = ccItems.filter(i => i.movement === 'Credit').reduce((s, i) => s + i.value, 0);
+    const ccDebit = ccItems.filter(i => i.movement === 'Debit').reduce((s, i) => s + i.value, 0);
+    const fcTotal = fcItems.reduce((s, i) => s + i.total, 0);
+    const fvTotal = fvItems.reduce((s, i) => s + i.total, 0);
+    const ncTotal = ncItems.reduce((s, i) => s + i.total, 0);
 
     return NextResponse.json({
-      investigation: 'Otros Ingresos (42) — 2025 completo',
-      annual: annual42,
-      monthly_detail: monthlyDetail,
+      investigation: 'Otros Ingresos (42) — 2025 completo desde DB',
+      summary: {
+        cc_credit: Math.round(ccCredit),
+        cc_debit: Math.round(ccDebit),
+        fc_total: Math.round(fcTotal),
+        fv_total: Math.round(fvTotal),
+        nc_total: Math.round(ncTotal),
+        db_net: Math.round(ccCredit - ccDebit + fvTotal - ncTotal - fcTotal),
+        bp_total: 24772880,
+      },
+      cc_items: ccItems,
+      cc_count: ccItems.length,
+      fc_items: fcItems,
+      fc_count: fcItems.length,
+      fv_items: fvItems,
+      fv_count: fvItems.length,
+      nc_items: ncItems,
+      nc_count: ncItems.length,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
