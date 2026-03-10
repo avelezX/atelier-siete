@@ -253,43 +253,55 @@ export default function SaldosPage() {
       {data.monthly_balance && data.monthly_balance.length > 0 && (() => {
         const balances = data.monthly_balance;
         const maxCost = Math.max(...balances.map((mb) => mb.own_cost_value), 1);
+        const CHART_HEIGHT = 200;
         return (
           <div className="bg-white rounded-xl border mb-8 p-6">
             <div className="flex items-center gap-3 mb-4">
               <BarChart3 className="w-5 h-5 text-amber-600" />
               <h3 className="text-lg font-semibold text-gray-900">Costo Inventario Propio — Fin de Mes</h3>
             </div>
-            <div className="flex items-end gap-1 h-48">
-              {balances.map((mb) => {
-                const height = maxCost > 0 ? (mb.own_cost_value / maxCost) * 100 : 0;
-                return (
-                  <div key={mb.month} className="flex-1 flex flex-col items-center group relative">
-                    <div className="absolute bottom-full mb-1 hidden group-hover:block z-10">
-                      <div className="bg-gray-900 text-white text-xs px-2 py-1 rounded whitespace-nowrap">
-                        {mb.month_label}: {formatCurrency(mb.own_cost_value)}
-                        <br />{mb.own_units} uds · {mb.own_products} prod
+            {/* Y-axis labels + bars */}
+            <div className="flex">
+              <div className="flex flex-col justify-between text-xs text-gray-400 pr-2 w-20 shrink-0" style={{ height: CHART_HEIGHT }}>
+                <span>{formatCurrency(maxCost)}</span>
+                <span>{formatCurrency(Math.round(maxCost / 2))}</span>
+                <span>$0</span>
+              </div>
+              <div className="flex-1 relative border-l border-b border-gray-200" style={{ height: CHART_HEIGHT }}>
+                {/* Grid lines */}
+                <div className="absolute w-full border-t border-dashed border-gray-100" style={{ top: '50%' }} />
+                {/* Bars */}
+                <div className="flex items-end gap-[2px] h-full px-1">
+                  {balances.map((mb) => {
+                    const barHeight = Math.max((mb.own_cost_value / maxCost) * CHART_HEIGHT, 2);
+                    return (
+                      <div key={mb.month} className="flex-1 group relative flex items-end">
+                        <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 hidden group-hover:block z-10">
+                          <div className="bg-gray-900 text-white text-xs px-2 py-1 rounded whitespace-nowrap shadow-lg">
+                            <span className="font-medium">{mb.month_label}</span>
+                            <br />Costo: {formatCurrency(mb.own_cost_value)}
+                            <br />{mb.own_units.toLocaleString()} uds · {mb.own_products} prod
+                          </div>
+                        </div>
+                        <div
+                          className="w-full bg-amber-400 hover:bg-amber-500 rounded-t-sm transition-colors cursor-pointer"
+                          style={{ height: barHeight }}
+                        />
                       </div>
-                    </div>
-                    <div
-                      className="w-full bg-amber-400 hover:bg-amber-500 rounded-t transition-colors min-h-[2px]"
-                      style={{ height: `${height}%` }}
-                    />
-                  </div>
-                );
-              })}
+                    );
+                  })}
+                </div>
+              </div>
             </div>
-            <div className="flex gap-1 mt-1">
-              {balances.map((mb) => (
+            {/* X-axis labels */}
+            <div className="flex ml-20 px-1 gap-[2px] mt-1">
+              {balances.map((mb, i) => (
                 <div key={mb.month} className="flex-1 text-center">
-                  <span className="text-[9px] text-gray-400 leading-none">
-                    {mb.month_label.split(' ')[0]}
-                  </span>
+                  {i % 3 === 0 ? (
+                    <span className="text-[9px] text-gray-500">{mb.month_label.replace(' 20', "'")}</span>
+                  ) : null}
                 </div>
               ))}
-            </div>
-            <div className="flex justify-between mt-2 text-xs text-gray-400">
-              <span>{balances[0]?.month_label}</span>
-              <span>{balances[balances.length - 1]?.month_label}</span>
             </div>
           </div>
         );
@@ -301,7 +313,7 @@ export default function SaldosPage() {
           <div className="px-6 py-4 border-b">
             <h3 className="text-lg font-semibold text-gray-900">Saldo a Fin de Mes</h3>
             <p className="text-sm text-gray-500">
-              Stock reconstruido: stock actual ajustado por compras y ventas de cada mes
+              Stock reconstruido a fin de mes. Costo = costo promedio de compra × unidades. Valor Vta = precio venta sin IVA × unidades.
             </p>
           </div>
           <table className="w-full text-sm">
@@ -310,11 +322,11 @@ export default function SaldosPage() {
                 <th className="px-4 py-3 font-medium text-gray-600">Mes</th>
                 <th className="px-4 py-3 font-medium text-amber-700 text-right">Propios Uds</th>
                 <th className="px-4 py-3 font-medium text-amber-700 text-right">Propios # Prod</th>
-                <th className="px-4 py-3 font-medium text-amber-700 text-right">Costo Propios</th>
-                <th className="px-4 py-3 font-medium text-amber-700 text-right">Venta Propios</th>
+                <th className="px-4 py-3 font-medium text-amber-700 text-right">Costo Inv. Propio</th>
+                <th className="px-4 py-3 font-medium text-amber-700 text-right">Valor Vta. Propio</th>
                 <th className="px-4 py-3 font-medium text-blue-700 text-right">Consig. Uds</th>
                 <th className="px-4 py-3 font-medium text-blue-700 text-right">Consig. # Prod</th>
-                <th className="px-4 py-3 font-medium text-blue-700 text-right">Venta Consig.</th>
+                <th className="px-4 py-3 font-medium text-blue-700 text-right">Valor Vta. Consig.</th>
               </tr>
             </thead>
             <tbody className="divide-y">
