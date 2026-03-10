@@ -1,104 +1,127 @@
 import { NextResponse } from 'next/server';
-import { atelierTableAdmin } from '@/lib/supabase';
+import { fetchTestBalanceReport } from '@/lib/siigo';
+import * as XLSX from 'xlsx';
 
-export const maxDuration = 60;
+export const maxDuration = 120;
 
-async function fetchAllRows(
-  table: string, select: string,
-  applyFilters?: (query: ReturnType<typeof atelierTableAdmin>) => ReturnType<typeof atelierTableAdmin>
-) {
-  const PAGE_SIZE = 1000;
-  let allData: Record<string, unknown>[] = [];
-  let from = 0;
-  while (true) {
-    let query = atelierTableAdmin(table).select(select).range(from, from + PAGE_SIZE - 1);
-    if (applyFilters) query = applyFilters(query);
-    const { data, error } = await query;
-    if (error) throw new Error(`${table}: ${error.message}`);
-    if (!data || data.length === 0) break;
-    allData = allData.concat(data);
-    if (data.length < PAGE_SIZE) break;
-    from += PAGE_SIZE;
+interface BPAccount {
+  code: string;
+  name: string;
+  saldo_inicial: number;
+  mov_debit: number;
+  mov_credit: number;
+  saldo_final: number;
+}
+
+async function parseBalanceExcel(fileUrl: string): Promise<BPAccount[]> {
+  const fileRes = await fetch(fileUrl);
+  if (!fileRes.ok) throw new Error(`Download failed: ${fileRes.status}`);
+  const buffer = await fileRes.arrayBuffer();
+  const workbook = XLSX.read(buffer, { type: 'array' });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const allRows: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
+
+  let headerRowIdx = -1, codeColIdx = 0, nameColIdx = 1, numsStartIdx = 2;
+  for (let i = 0; i < Math.min(allRows.length, 10); i++) {
+    const row = allRows[i] || [];
+    for (let col = 0; col < row.length; col++) {
+      const cell = String(row[col] || '').toLowerCase();
+      if (cell.includes('código cuenta') || cell.includes('codigo cuenta') || cell === 'código' || cell === 'codigo') {
+        headerRowIdx = i; codeColIdx = col; nameColIdx = col + 1; numsStartIdx = col + 2; break;
+      }
+    }
+    if (headerRowIdx < 0) {
+      const firstCell = String(row[0] || '').toLowerCase();
+      if (firstCell === 'nivel') { headerRowIdx = i; codeColIdx = 2; nameColIdx = 3; numsStartIdx = 4; }
+    }
+    if (headerRowIdx >= 0) break;
   }
-  return allData;
+
+  const accounts: BPAccount[] = [];
+  for (let i = (headerRowIdx >= 0 ? headerRowIdx + 1 : 0); i < allRows.length; i++) {
+    const row = allRows[i] || [];
+    const code = String(row[codeColIdx] || '').trim();
+    if (!code || !/^\d{1,8}$/.test(code)) continue;
+    const nums = row.slice(numsStartIdx).map((v) => { const n = Number(v); return isNaN(n) ? 0 : n; });
+    accounts.push({
+      code, name: String(row[nameColIdx] || '').trim(),
+      saldo_inicial: nums[0] || 0, mov_debit: nums[1] || 0, mov_credit: nums[2] || 0, saldo_final: nums[3] || 0,
+    });
+  }
+  return accounts;
 }
 
 export async function GET() {
   try {
-    // === Otros Ingresos (42) — Todo 2025 desde DB ===
+    const ACCOUNT = '11100501';
+    const YEAR = 2025;
 
-    // Journals (CC)
-    const journals = await fetchAllRows('journals', 'id, name, date');
-    const journals2025 = journals.filter(j => (j.date as string)?.startsWith('2025'));
-    const journalIds2025 = new Set(journals2025.map(j => j.id as string));
+    const monthlyData: {
+      month: string;
+      saldo_inicial: number;
+      mov_debit: number;
+      mov_credit: number;
+      saldo_final: number;
+      net: number;
+    }[] = [];
 
-    const journalItems42 = await fetchAllRows(
-      'journal_items',
-      'account_code, movement, value, journal_id, description',
-      (q) => q.like('account_code', '42%')
-    );
+    // Fetch each month
+    for (let m = 1; m <= 12; m++) {
+      try {
+        const report = await fetchTestBalanceReport(YEAR, m, m);
+        if (report.file_url) {
+          const accounts = await parseBalanceExcel(report.file_url);
+          const acc = accounts.find(a => a.code === ACCOUNT);
+          if (acc) {
+            monthlyData.push({
+              month: `${YEAR}-${String(m).padStart(2, '0')}`,
+              saldo_inicial: Math.round(acc.saldo_inicial),
+              mov_debit: Math.round(acc.mov_debit),
+              mov_credit: Math.round(acc.mov_credit),
+              saldo_final: Math.round(acc.saldo_final),
+              net: Math.round(acc.mov_debit - acc.mov_credit),
+            });
+          }
+        }
+      } catch {
+        // skip
+      }
+      if (m < 12) await new Promise(r => setTimeout(r, 500));
+    }
 
-    const ccItems = journalItems42
-      .filter(i => journalIds2025.has(i.journal_id as string))
-      .map(i => {
-        const j = journals2025.find(x => x.id === i.journal_id);
-        return {
-          source: 'CC',
-          doc: (j?.name as string) || '',
-          date: (j?.date as string) || '',
-          account_code: i.account_code as string,
-          movement: i.movement as string,
-          value: Number(i.value) || 0,
-          description: (i.description as string) || '',
-        };
-      })
-      .sort((a, b) => b.value - a.value);
+    // Annual totals
+    const totalDebit = monthlyData.reduce((s, m) => s + m.mov_debit, 0);
+    const totalCredit = monthlyData.reduce((s, m) => s + m.mov_credit, 0);
+    const firstSaldo = monthlyData.length > 0 ? monthlyData[0].saldo_inicial : 0;
+    const lastSaldo = monthlyData.length > 0 ? monthlyData[monthlyData.length - 1].saldo_final : 0;
 
-    // Purchases (FC)
-    const purchases = await fetchAllRows('purchases', 'id, date, name, supplier_name');
-    const purchases2025 = purchases.filter(p => (p.date as string)?.startsWith('2025'));
-    const purchaseIds2025 = new Set(purchases2025.map(p => p.id as string));
-
-    const purchaseItems42 = await fetchAllRows(
-      'purchase_items',
-      'account_code, price, quantity, purchase_id, description',
-      (q) => q.like('account_code', '42%')
-    );
-
-    const fcItems = purchaseItems42
-      .filter(i => purchaseIds2025.has(i.purchase_id as string))
-      .map(i => {
-        const p = purchases2025.find(x => x.id === i.purchase_id);
-        return {
-          source: 'FC',
-          doc: (p?.name as string) || '',
-          date: (p?.date as string) || '',
-          supplier: (p?.supplier_name as string) || '',
-          account_code: i.account_code as string,
-          total: (Number(i.price) || 0) * (Number(i.quantity) || 1),
-          description: (i.description as string) || '',
-        };
-      })
-      .sort((a, b) => b.total - a.total);
-
-    // Summary
-    const ccCredit = ccItems.filter(i => i.movement === 'Credit').reduce((s, i) => s + i.value, 0);
-    const ccDebit = ccItems.filter(i => i.movement === 'Debit').reduce((s, i) => s + i.value, 0);
-    const fcTotal = fcItems.reduce((s, i) => s + i.total, 0);
+    // Also get all 111xx accounts from the annual BP for context
+    let relatedAccounts: { code: string; name: string; saldo_final: number }[] = [];
+    try {
+      const annualReport = await fetchTestBalanceReport(YEAR, 1, 12);
+      if (annualReport.file_url) {
+        const annualAccs = await parseBalanceExcel(annualReport.file_url);
+        relatedAccounts = annualAccs
+          .filter(a => a.code.startsWith('1110'))
+          .map(a => ({ code: a.code, name: a.name, saldo_final: Math.round(a.saldo_final) }))
+          .sort((a, b) => a.code.localeCompare(b.code));
+      }
+    } catch {
+      // skip
+    }
 
     return NextResponse.json({
-      investigation: 'Otros Ingresos (42) — 2025 completo desde DB',
-      summary: {
-        cc_credit: Math.round(ccCredit),
-        cc_debit: Math.round(ccDebit),
-        fc_total: Math.round(fcTotal),
-        db_net: Math.round(ccCredit - ccDebit - fcTotal),
-        bp_total: 24772880,
+      investigation: `${ACCOUNT} Cuenta Corriente Bancolombia — ${YEAR}`,
+      account: ACCOUNT,
+      monthly: monthlyData,
+      totals: {
+        saldo_inicio_anio: firstSaldo,
+        total_debitos: totalDebit,
+        total_creditos: totalCredit,
+        net_anual: totalDebit - totalCredit,
+        saldo_fin_anio: lastSaldo,
       },
-      cc_items: ccItems,
-      cc_count: ccItems.length,
-      fc_items: fcItems,
-      fc_count: fcItems.length,
+      related_accounts: relatedAccounts,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
