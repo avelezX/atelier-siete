@@ -158,27 +158,22 @@ export async function GET(req: NextRequest) {
     const balanceByMonth: Record<string, BalanceAccount[]> = {};
     const siigoErrors: string[] = [];
 
-    // Fetch all 12 months in parallel (batches of 4 to avoid rate limits)
-    for (let batch = 0; batch < 3; batch++) {
-      const promises = [];
-      for (let m = batch * 4 + 1; m <= Math.min((batch + 1) * 4, 12); m++) {
-        promises.push(
-          (async () => {
-            try {
-              const report = await fetchTestBalanceReport(year, m, m);
-              if (report.file_url) {
-                const accounts = await parseBalanceExcel(report.file_url);
-                balanceByMonth[`${year}-${String(m).padStart(2, '0')}`] = accounts;
-              } else {
-                siigoErrors.push(`Month ${m}: no file_url`);
-              }
-            } catch (e: unknown) {
-              siigoErrors.push(`Month ${m}: ${e instanceof Error ? e.message : String(e)}`);
-            }
-          })()
-        );
+    // Fetch months SEQUENTIALLY — Siigo caches reports and returns stale data
+    // when called in parallel. A small delay between calls prevents cache collisions.
+    for (let m = 1; m <= 12; m++) {
+      try {
+        const report = await fetchTestBalanceReport(year, m, m);
+        if (report.file_url) {
+          const accounts = await parseBalanceExcel(report.file_url);
+          balanceByMonth[`${year}-${String(m).padStart(2, '0')}`] = accounts;
+        } else {
+          siigoErrors.push(`Month ${m}: no file_url`);
+        }
+      } catch (e: unknown) {
+        siigoErrors.push(`Month ${m}: ${e instanceof Error ? e.message : String(e)}`);
       }
-      await Promise.all(promises);
+      // Small delay to avoid Siigo cache collisions
+      if (m < 12) await new Promise(r => setTimeout(r, 500));
     }
 
     // === PART B: Fetch our DB data (same as Resumen API) ===
