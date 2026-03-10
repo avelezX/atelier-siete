@@ -22,6 +22,7 @@ import {
   BookOpen,
   Wrench,
   Warehouse,
+  Scale,
 } from "lucide-react";
 
 interface MenuItem {
@@ -50,6 +51,7 @@ const menuSections: MenuSection[] = [
       { name: "Corrección Costos", href: "/correccion-costos", icon: Wrench },
       { name: "Inventario Propio", href: "/inventario", icon: Warehouse },
       { name: "Saldos Inventario", href: "/saldos", icon: Package },
+      { name: "Comparar Balance", href: "/comparar-balance", icon: Scale },
     ]
   },
   {
