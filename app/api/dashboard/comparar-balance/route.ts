@@ -31,6 +31,7 @@ async function fetchAllRows(
 interface BalanceAccount {
   code: string;
   account_name: string;
+  nivel: string;  // Clase, Grupo, Cuenta, Subcuenta, Auxiliar
   initial_balance: number;
   mov_debit: number;
   mov_credit: number;
@@ -49,6 +50,7 @@ async function parseBalanceExcel(fileUrl: string): Promise<BalanceAccount[]> {
   // Find header row and detect column layout
   // Siigo format: Nivel | Transaccional | Código cuenta contable | Nombre | Saldo Inicial | Mov Débito | Mov Crédito | Saldo Final
   let headerRowIdx = -1;
+  let nivelColIdx = -1;  // "Nivel" column (Clase, Grupo, Cuenta, Subcuenta, Auxiliar)
   let codeColIdx = 0;
   let nameColIdx = 1;
   let numsStartIdx = 2;
@@ -73,9 +75,20 @@ async function parseBalanceExcel(fileUrl: string): Promise<BalanceAccount[]> {
       const firstCell = String(row[0] || '').toLowerCase();
       if (firstCell === 'nivel') {
         headerRowIdx = i;
+        nivelColIdx = 0;
         codeColIdx = 2;
         nameColIdx = 3;
         numsStartIdx = 4;
+      }
+    }
+
+    // Also detect Nivel column from header row
+    if (headerRowIdx === i) {
+      for (let col = 0; col < row.length; col++) {
+        if (String(row[col] || '').toLowerCase() === 'nivel') {
+          nivelColIdx = col;
+          break;
+        }
       }
     }
 
@@ -90,6 +103,7 @@ async function parseBalanceExcel(fileUrl: string): Promise<BalanceAccount[]> {
     const code = String(row[codeColIdx] || '').trim();
     if (!code || !/^\d{1,8}$/.test(code)) continue;
 
+    const nivel = nivelColIdx >= 0 ? String(row[nivelColIdx] || '').trim() : '';
     const name = String(row[nameColIdx] || '').trim();
     const nums = row.slice(numsStartIdx).map((v) => {
       const n = Number(v);
@@ -100,6 +114,7 @@ async function parseBalanceExcel(fileUrl: string): Promise<BalanceAccount[]> {
     accounts.push({
       code,
       account_name: name,
+      nivel,
       initial_balance: nums[0] || 0,
       mov_debit: nums[1] || 0,
       mov_credit: nums[2] || 0,
@@ -110,15 +125,21 @@ async function parseBalanceExcel(fileUrl: string): Promise<BalanceAccount[]> {
   return accounts;
 }
 
-// Aggregate balance accounts by prefix
+// Aggregate balance accounts by prefix — only leaf accounts (no children) to avoid double counting
 function aggregateByPrefix(accounts: BalanceAccount[], prefix: string): { mov_debit: number; mov_credit: number; net: number } {
+  // Collect all codes that match the prefix
+  const matching = accounts.filter(a => a.code.startsWith(prefix));
+
+  // Build set of all codes for parent detection
+  const allCodes = new Set(matching.map(a => a.code));
+
   let movDebit = 0;
   let movCredit = 0;
 
-  for (const acc of accounts) {
-    if (!acc.code.startsWith(prefix)) continue;
-    // Only count leaf accounts (6+ digits) to avoid double counting with summary rows
-    if (acc.code.length >= 6) {
+  for (const acc of matching) {
+    // An account is a leaf if no other account has it as a prefix
+    const isLeaf = !matching.some(other => other.code !== acc.code && other.code.startsWith(acc.code));
+    if (isLeaf) {
       movDebit += acc.mov_debit;
       movCredit += acc.mov_credit;
     }
@@ -183,11 +204,25 @@ export async function GET(req: NextRequest) {
       (q) => q.like('account_code', '5%').eq('movement', 'Debit')
     );
 
-    // Purchase items: expenses 5%
+    // Revenue: journal_items 41% Credit (to cross-check against invoices)
+    const revenueJournal = await fetchAllRows(
+      'journal_items',
+      'account_code, movement, value, journal_id',
+      (q) => q.like('account_code', '41%').eq('movement', 'Credit')
+    );
+
+    // Purchase items: expenses 5% AND COGS 6135%
     const gastosPurchase = await fetchAllRows(
       'purchase_items',
       'account_code, price, quantity, purchase_id',
       (q) => q.like('account_code', '5%')
+    );
+
+    // Purchase items: COGS from purchases (account 6135%)
+    const cogsPurchase = await fetchAllRows(
+      'purchase_items',
+      'account_code, price, quantity, purchase_id',
+      (q) => q.like('account_code', '6135%')
     );
 
     // Purchase headers for dates
@@ -209,13 +244,15 @@ export async function GET(req: NextRequest) {
 
     // === PART C: Aggregate our DB data by month ===
     interface OurMonth {
-      ventas_brutas: number;  // subtotal (sin IVA)
+      ventas_brutas: number;        // from invoice subtotals (sin IVA)
+      ventas_journal_41: number;    // from journal_items 41% Credit (should match Siigo BP)
       notas_credito: number;
-      costo_ventas: number;
-      gastos_admin: number;   // 51xx
-      gastos_venta: number;   // 52xx
-      gastos_financieros: number; // 53xx
-      // Detailed subcategories
+      costo_ventas_cc: number;      // COGS from journals only
+      costo_ventas_fc: number;      // COGS from purchase items
+      costo_ventas: number;         // total COGS (cc + fc)
+      gastos_admin: number;         // 51xx
+      gastos_venta: number;         // 52xx
+      gastos_financieros: number;   // 53xx
       subcats: Record<string, number>;
     }
 
@@ -224,7 +261,8 @@ export async function GET(req: NextRequest) {
     function ensureMonth(month: string): OurMonth {
       if (!ourByMonth.has(month)) {
         ourByMonth.set(month, {
-          ventas_brutas: 0, notas_credito: 0, costo_ventas: 0,
+          ventas_brutas: 0, ventas_journal_41: 0, notas_credito: 0,
+          costo_ventas_cc: 0, costo_ventas_fc: 0, costo_ventas: 0,
           gastos_admin: 0, gastos_venta: 0, gastos_financieros: 0,
           subcats: {},
         });
@@ -248,15 +286,23 @@ export async function GET(req: NextRequest) {
       ensureMonth(month).notas_credito += (total - tax);
     });
 
-    // COGS from journals
+    // Revenue from journal entries (41% Credit) — cross-check
+    revenueJournal.forEach((item) => {
+      const date = journalDateMap.get(item.journal_id as string);
+      const month = date?.substring(0, 7);
+      if (!month) return;
+      ensureMonth(month).ventas_journal_41 += Number(item.value) || 0;
+    });
+
+    // COGS from journals (CC)
     costoVentas.forEach((item) => {
       const date = journalDateMap.get(item.journal_id as string);
       const month = date?.substring(0, 7);
       if (!month) return;
       const value = Number(item.value) || 0;
       const m = ensureMonth(month);
+      m.costo_ventas_cc += value;
       m.costo_ventas += value;
-      // Subcat
       const prefix4 = (item.account_code as string).substring(0, 4);
       m.subcats[prefix4] = (m.subcats[prefix4] || 0) + value;
     });
@@ -296,6 +342,21 @@ export async function GET(req: NextRequest) {
       m.subcats[prefix4] = (m.subcats[prefix4] || 0) + value;
     });
 
+    // COGS from purchases (FC) — account 6135%
+    cogsPurchase.forEach((item) => {
+      const date = purchaseDateMap.get(item.purchase_id as string);
+      const month = date?.substring(0, 7);
+      if (!month) return;
+      const qty = Number(item.quantity) || 1;
+      const value = (Number(item.price) || 0) * qty;
+      const m = ensureMonth(month);
+      m.costo_ventas_fc += value;
+      m.costo_ventas += value;
+
+      const prefix4 = (item.account_code as string).substring(0, 4);
+      m.subcats[prefix4] = (m.subcats[prefix4] || 0) + value;
+    });
+
     // === PART D: Build comparison ===
     const months = [];
     for (let m = 1; m <= 12; m++) {
@@ -316,7 +377,10 @@ export async function GET(req: NextRequest) {
       const ourVenta = ours?.gastos_venta || 0;
       const ourFinancieros = ours?.gastos_financieros || 0;
       const ourCogs = ours?.costo_ventas || 0;
+      const ourCogsCC = ours?.costo_ventas_cc || 0;
+      const ourCogsFC = ours?.costo_ventas_fc || 0;
       const ourVentas = ours?.ventas_brutas || 0;
+      const ourVentasJournal = ours?.ventas_journal_41 || 0;
       const ourNC = ours?.notas_credito || 0;
 
       // Subcategory detail for expense accounts
@@ -354,8 +418,10 @@ export async function GET(req: NextRequest) {
         comparison: {
           ingresos_41: {
             siigo_credit: Math.round(bp41.mov_credit),
-            ours: Math.round(ourVentas),
-            diff: Math.round(ourVentas - bp41.mov_credit),
+            ours_invoices: Math.round(ourVentas),
+            ours_journal_41: Math.round(ourVentasJournal),
+            diff_vs_invoices: Math.round(ourVentas - bp41.mov_credit),
+            diff_vs_journals: Math.round(ourVentasJournal - bp41.mov_credit),
           },
           gastos_admin_51: {
             siigo_debit: Math.round(bp51.mov_debit),
@@ -374,7 +440,9 @@ export async function GET(req: NextRequest) {
           },
           costo_ventas_6135: {
             siigo_debit: Math.round(bp6135.mov_debit),
-            ours: Math.round(ourCogs),
+            ours_total: Math.round(ourCogs),
+            ours_cc: Math.round(ourCogsCC),
+            ours_fc: Math.round(ourCogsFC),
             diff: Math.round(ourCogs - bp6135.mov_debit),
           },
         },
@@ -396,8 +464,8 @@ export async function GET(req: NextRequest) {
       annualOurs.admin_51 += m.comparison.gastos_admin_51.ours;
       annualOurs.venta_52 += m.comparison.gastos_venta_52.ours;
       annualOurs.financieros_53 += m.comparison.gastos_financieros_53.ours;
-      annualOurs.cogs_6135 += m.comparison.costo_ventas_6135.ours;
-      annualOurs.ingresos_41 += m.comparison.ingresos_41.ours;
+      annualOurs.cogs_6135 += m.comparison.costo_ventas_6135.ours_total;
+      annualOurs.ingresos_41 += m.comparison.ingresos_41.ours_invoices;
     });
 
     return NextResponse.json({
