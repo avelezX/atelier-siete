@@ -25,19 +25,34 @@ export async function GET(req: NextRequest) {
     }
     const buffer = await fileRes.arrayBuffer();
 
-    // 3. Parse the Excel
+    // 3. Parse the Excel — use raw array of arrays to handle Siigo's header rows
     const workbook = XLSX.read(buffer, { type: 'array' });
     const sheetName = workbook.SheetNames[0];
     const sheet = workbook.Sheets[sheetName];
-    const rawData = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: null });
+    const allRows: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
 
-    // 4. Extract column names (for debugging)
-    const headers = rawData.length > 0 ? Object.keys(rawData[0]) : [];
+    // 4. Find the header row (contains "Código" or "Cuenta" or starts with column names)
+    // Then data rows follow
+    let headerRowIdx = -1;
+    const rawDebug: string[] = [];
+    for (let i = 0; i < Math.min(allRows.length, 10); i++) {
+      const rowStr = (allRows[i] || []).map(c => String(c || '')).join(' | ');
+      rawDebug.push(`Row ${i}: ${rowStr.substring(0, 200)}`);
+      const row = allRows[i] || [];
+      const firstCell = String(row[0] || '').toLowerCase();
+      const secondCell = String(row[1] || '').toLowerCase();
+      if (firstCell.includes('código') || firstCell.includes('codigo') ||
+          secondCell.includes('cuenta') || firstCell === 'code') {
+        headerRowIdx = i;
+      }
+    }
 
-    // 5. Parse rows into structured data
-    // Typical balance de prueba columns:
-    // Código, Cuenta, Saldo Anterior Débito, Saldo Anterior Crédito,
-    // Movimiento Débito, Movimiento Crédito, Nuevo Saldo Débito, Nuevo Saldo Crédito
+    // Extract headers
+    const headers = headerRowIdx >= 0
+      ? (allRows[headerRowIdx] || []).map(c => String(c || '').trim())
+      : [];
+
+    // 5. Parse data rows (after header)
     interface BalanceRow {
       code: string;
       account_name: string;
@@ -50,14 +65,16 @@ export async function GET(req: NextRequest) {
     }
 
     const accounts: BalanceRow[] = [];
-    for (const row of rawData) {
-      const values = Object.values(row);
-      // Find the code column - first column that looks like a PUC code
-      const code = String(values[0] || '').trim();
-      if (!code || !/^\d/.test(code)) continue; // Skip header/summary rows
+    const startRow = headerRowIdx >= 0 ? headerRowIdx + 1 : 0;
 
-      const name = String(values[1] || '').trim();
-      const nums = values.slice(2).map((v) => {
+    for (let i = startRow; i < allRows.length; i++) {
+      const row = allRows[i] || [];
+      const code = String(row[0] || '').trim();
+      // Valid PUC codes: 1-9 digits, typically 1-8 digits
+      if (!code || !/^\d{1,8}$/.test(code)) continue;
+
+      const name = String(row[1] || '').trim();
+      const nums = row.slice(2).map((v) => {
         const n = Number(v);
         return isNaN(n) ? 0 : n;
       });
@@ -142,8 +159,10 @@ export async function GET(req: NextRequest) {
         file_url: report.file_url,
         sheets: workbook.SheetNames,
         headers,
-        total_rows: rawData.length,
+        total_rows: allRows.length,
         parsed_accounts: accounts.length,
+        header_row_idx: headerRowIdx,
+        raw_first_rows: rawDebug,
       },
       categories: Object.entries(categories)
         .sort(([a], [b]) => a.localeCompare(b))
