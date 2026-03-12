@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la .env*)",
+      "Bash(gh repo:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(start https://atelier-siete.vercel.app)"
+    ]
+  }
+}
