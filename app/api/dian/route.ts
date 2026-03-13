@@ -8,6 +8,7 @@ export async function GET(request: NextRequest) {
     const { searchParams } = request.nextUrl;
     const group = searchParams.get('group') ?? '';
     const month = searchParams.get('month') ?? '';
+    const year = searchParams.get('year') ?? '';
     const search = searchParams.get('search') ?? '';
 
     const PAGE_SIZE = 1000;
@@ -24,10 +25,12 @@ export async function GET(request: NextRequest) {
       if (group) query = query.eq('document_group', group);
 
       if (month) {
-        const [year, mon] = month.split('-');
+        const [y, mon] = month.split('-');
         const startDate = `${month}-01`;
-        const endDate = new Date(parseInt(year), parseInt(mon), 0).toISOString().split('T')[0];
+        const endDate = new Date(parseInt(y), parseInt(mon), 0).toISOString().split('T')[0];
         query = query.gte('issue_date', startDate).lte('issue_date', endDate);
+      } else if (year) {
+        query = query.gte('issue_date', `${year}-01-01`).lte('issue_date', `${year}-12-31`);
       }
 
       if (search) {

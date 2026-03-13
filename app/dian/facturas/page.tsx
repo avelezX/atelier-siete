@@ -47,22 +47,31 @@ function formatDate(dateStr: string): string {
   return `${day}/${month}/${year}`;
 }
 
-function getAvailableMonths() {
-  const months: { value: string; label: string }[] = [{ value: '', label: 'Todos los meses' }];
-  const start = new Date(2023, 0, 1);
-  const end = new Date();
-  end.setMonth(end.getMonth() + 1);
-  const current = new Date(end);
-  while (current >= start) {
-    const value = `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}`;
-    const label = current.toLocaleDateString('es-CO', { year: 'numeric', month: 'long' });
-    months.push({ value, label });
-    current.setMonth(current.getMonth() - 1);
+function getAvailableYears() {
+  const currentYear = new Date().getFullYear();
+  const years: { value: string; label: string }[] = [{ value: '', label: 'Todos los años' }];
+  for (let y = currentYear; y >= 2023; y--) {
+    years.push({ value: String(y), label: String(y) });
   }
-  return months;
+  return years;
 }
 
-const MONTHS = getAvailableMonths();
+const YEARS = getAvailableYears();
+const MONTHS = [
+  { value: '', label: 'Todos los meses' },
+  { value: '01', label: 'Enero' },
+  { value: '02', label: 'Febrero' },
+  { value: '03', label: 'Marzo' },
+  { value: '04', label: 'Abril' },
+  { value: '05', label: 'Mayo' },
+  { value: '06', label: 'Junio' },
+  { value: '07', label: 'Julio' },
+  { value: '08', label: 'Agosto' },
+  { value: '09', label: 'Septiembre' },
+  { value: '10', label: 'Octubre' },
+  { value: '11', label: 'Noviembre' },
+  { value: '12', label: 'Diciembre' },
+];
 const PAGE_SIZE = 100;
 
 export default function DianFacturasPage() {
@@ -72,7 +81,8 @@ export default function DianFacturasPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
-  const [month, setMonth] = useState('');
+  const [selectedYear, setSelectedYear] = useState('');
+  const [selectedMonth, setSelectedMonth] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [prefixFilter, setPrefixFilter] = useState('');
@@ -90,7 +100,11 @@ export default function DianFacturasPage() {
       const params = new URLSearchParams();
       params.set('group', activeTab);
       if (search) params.set('search', search);
-      if (month) params.set('month', month);
+      if (selectedYear && selectedMonth) {
+        params.set('month', `${selectedYear}-${selectedMonth}`);
+      } else if (selectedYear) {
+        params.set('year', selectedYear);
+      }
       const res = await fetch(`/api/dian?${params.toString()}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Error cargando documentos DIAN');
@@ -101,7 +115,7 @@ export default function DianFacturasPage() {
     } finally {
       setLoading(false);
     }
-  }, [activeTab, search, month]);
+  }, [activeTab, search, selectedYear, selectedMonth]);
 
   useEffect(() => {
     const timer = setTimeout(fetchDocuments, 300);
@@ -112,7 +126,8 @@ export default function DianFacturasPage() {
     setActiveTab(tab);
     setExpandedId(null);
     setSearch('');
-    setMonth('');
+    setSelectedYear('');
+    setSelectedMonth('');
     setPrefixFilter('');
     setSyncResult(null);
     setSyncError('');
@@ -124,7 +139,8 @@ export default function DianFacturasPage() {
     setSyncError('');
     try {
       const body: Record<string, string> = {};
-      if (month) body.month = month;
+      if (selectedYear && selectedMonth) body.month = `${selectedYear}-${selectedMonth}`;
+      else if (selectedYear) body.year = selectedYear;
       const res = await fetch('/api/siigo/purchases/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -141,8 +157,8 @@ export default function DianFacturasPage() {
     }
   };
 
-  const hasFilters = search || month || prefixFilter;
-  const clearFilters = () => { setSearch(''); setMonth(''); setPrefixFilter(''); };
+  const hasFilters = search || selectedYear || selectedMonth || prefixFilter;
+  const clearFilters = () => { setSearch(''); setSelectedYear(''); setSelectedMonth(''); setPrefixFilter(''); };
 
   const isCompras = activeTab === 'Recibido';
 
@@ -332,9 +348,17 @@ export default function DianFacturasPage() {
               />
             </div>
             <select
-              value={month}
-              onChange={(e) => setMonth(e.target.value)}
+              value={selectedYear}
+              onChange={(e) => { setSelectedYear(e.target.value); setSelectedMonth(''); }}
               className="text-sm text-gray-900 border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500"
+            >
+              {YEARS.map(y => <option key={y.value} value={y.value}>{y.label}</option>)}
+            </select>
+            <select
+              value={selectedMonth}
+              onChange={(e) => setSelectedMonth(e.target.value)}
+              disabled={!selectedYear}
+              className="text-sm text-gray-900 border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
             </select>

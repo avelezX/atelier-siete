@@ -52,11 +52,16 @@ export async function POST(request: NextRequest) {
     const confirm = request.nextUrl.searchParams.get('confirm') === 'true';
     const cufes = normalizedDocuments.map(d => d.cufe);
 
-    const { data: existing } = await atelierTableAdmin('dian_documents')
-      .select('cufe')
-      .in('cufe', cufes);
-
-    const existingCufes = new Set((existing || []).map((r: any) => r.cufe));
+    // Split into chunks of 100 to avoid URL length limits in PostgREST .in() queries
+    const CHUNK_SIZE = 100;
+    const existingCufes = new Set<string>();
+    for (let i = 0; i < cufes.length; i += CHUNK_SIZE) {
+      const chunk = cufes.slice(i, i + CHUNK_SIZE);
+      const { data: existing } = await atelierTableAdmin('dian_documents')
+        .select('cufe')
+        .in('cufe', chunk);
+      (existing || []).forEach((r: any) => existingCufes.add(r.cufe));
+    }
     const newDocuments = normalizedDocuments.filter(d => !existingCufes.has(d.cufe));
     const duplicateCount = normalizedDocuments.length - newDocuments.length;
 
