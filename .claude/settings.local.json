@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la .env*)",
+      "Bash(gh repo:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(start https://atelier-siete.vercel.app)",
+      "Bash(npm run:*)",
+      "Bash(curl -s http://localhost:3000 -o /dev/null -w \"%{http_code}\")",
+      "Bash(start http://localhost:3000)",
+      "Bash(npm install:*)",
+      "Bash(npx kill-port:*)",
+      "Bash(taskkill /F /IM node.exe)",
+      "Bash(cmd /c \"taskkill /F /IM node.exe\")",
+      "Bash(netstat -ano)",
+      "Bash(curl -s -L http://localhost:3000 -o /dev/null -w \"%{http_code}\")",
+      "Bash(curl -s -L http://localhost:3000/api/siigo/auth -o /dev/null -w \"%{http_code}\")",
+      "Bash(curl -s http://localhost:3000 -w \"\\\\n%{redirect_url}\")",
+      "Bash(powershell -c \"Invoke-WebRequest -Uri ''http://localhost:3000'' -MaximumRedirection 0 -ErrorAction SilentlyContinue | Select-Object StatusCode, Headers\")",
+      "Bash(powershell -c \"Start-Process ''http://localhost:3000''\")",
+      "Bash(ls -la *.config* *.config.ts)",
+      "Bash(ls postcss.config* tailwind.config* next.config*)"
+    ]
+  }
+}

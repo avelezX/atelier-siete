@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cmd /c \"taskkill /F /IM node.exe /T\")",
+      "Bash(powershell -c \"Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force; Write-Host ''done''\")",
+      "Bash(powershell -c \"Get-Process -Id 3132 -ErrorAction SilentlyContinue | Stop-Process -Force; Write-Host ''done''\")",
+      "Bash(curl -s http://localhost:3000 -o /dev/null -w \"status: %{http_code}\")",
+      "Read(//c/Users/MiguelCastillo/Documents/GitHub/Hermes//**)",
+      "Bash(curl -s \"http://localhost:3000/api/siigo/invoices?page=1&page_size=1\")",
+      "Bash(python -m json.tool)",
+      "Bash(curl -s \"http://localhost:3000/api/siigo/auth\")",
+      "Bash(curl -s \"http://localhost:3000/api/siigo/document-types\")",
+      "Bash(xargs grep:*)"
+    ]
+  }
+}

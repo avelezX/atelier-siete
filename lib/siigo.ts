@@ -21,6 +21,8 @@ import type {
   SiigoCreateJournalRequest,
   SiigoCreateJournalResponse,
   SiigoPurchase,
+  SiigoCreatePurchaseRequest,
+  SiigoCreatePurchaseResponse,
 } from '@/types/siigo';
 
 const SIIGO_API_URL = process.env.SIIGO_API_URL || 'https://api.siigo.com';
@@ -364,6 +366,52 @@ export async function fetchTestBalanceReport(
     month_end: monthEnd,
     includes_tax_difference: false,
   });
+}
+
+/** Fetch payment types for purchases (FC), fallback to FV */
+export async function fetchPurchasePaymentTypes(): Promise<SiigoPaymentType[]> {
+  try {
+    const data = await siigoGet<SiigoPaymentType[]>('/v1/payment-types', { document_type: 'FC' });
+    return Array.isArray(data) ? data : [data];
+  } catch {
+    const data = await siigoGet<SiigoPaymentType[]>('/v1/payment-types', { document_type: 'FV' });
+    return Array.isArray(data) ? data : [data];
+  }
+}
+
+/** Create a purchase invoice in Siigo via POST /v1/purchases */
+export async function createPurchase(data: SiigoCreatePurchaseRequest): Promise<SiigoCreatePurchaseResponse> {
+  return siigoPost<SiigoCreatePurchaseResponse>('/v1/purchases', data);
+}
+
+/**
+ * Create or update a supplier contact in Siigo.
+ * Used when a DIAN provider doesn't exist in Siigo yet.
+ */
+export async function createSupplier(nit: string, name: string): Promise<any> {
+  const upperName = name.toUpperCase();
+  const isCompany = /S\.A\.|SAS|S\.A\.S|LTDA|LIMITADA|S\.C\.A|CIA\.|COMPAÑIA|CORPORACION|COOPERATIVA|FUNDACION|EMPRESA|INDUSTRIAS|COMERCIALIZADORA|DISTRIBUIDORA|INMOBILIARIA|INVERSIONES|PROMOTORA|CONSTRUCTORA|SEGUROS|BANCO|GRUPO|CENTRO|SERVICIOS/.test(upperName);
+  const cleanNit = nit.replace(/[^0-9]/g, '');
+
+  const nameParts = name.trim().split(/\s+/);
+  const nameArray = isCompany
+    ? [name.trim()]
+    : nameParts.length >= 2
+      ? [nameParts[0], nameParts.slice(1).join(' ')]
+      : [name.trim(), ''];
+
+  const payload = {
+    type: 'Customer',
+    person_type: isCompany ? 'Company' : 'Person',
+    id_type: { code: isCompany ? '31' : '13' },
+    identification: cleanNit,
+    name: nameArray,
+    active: true,
+    customer_settings: { is_customer: false },
+    supplier_settings: { is_supplier: true },
+  };
+
+  return siigoPost<any>('/v1/customers', payload);
 }
 
 /** Invalidate cached token */
