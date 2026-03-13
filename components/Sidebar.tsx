@@ -30,6 +30,7 @@ import {
   ShoppingCart,
   CreditCard,
   FileStack,
+  CalendarCheck,
 } from "lucide-react";
 
 interface MenuItem {
@@ -74,6 +75,7 @@ const menuSections: MenuSection[] = [
     title: "DIAN",
     items: [
       { name: "Facturas DIAN", href: "/dian/facturas", icon: Building2 },
+      { name: "Obligaciones", href: "/dian/obligaciones", icon: CalendarCheck },
       { name: "Reportes DIAN", href: "/dian/reportes", icon: BarChart3 },
       { name: "Importar DIAN", href: "/dian/importar", icon: Upload },
     ]
