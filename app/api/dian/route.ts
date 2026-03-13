@@ -10,6 +10,7 @@ export async function GET(request: NextRequest) {
     const month = searchParams.get('month') ?? '';
     const year = searchParams.get('year') ?? '';
     const search = searchParams.get('search') ?? '';
+    const siigoStatus = searchParams.get('siigoStatus') ?? ''; // 'synced' | 'pending' | 'discarded'
 
     const PAGE_SIZE = 1000;
     let offset = 0;
@@ -18,11 +19,19 @@ export async function GET(request: NextRequest) {
 
     while (hasMore) {
       let query = atelierTableAdmin('dian_documents')
-        .select('id, cufe, number, prefix, document_type, document_group, issue_date, reception_date, issuer_nit, issuer_name, receiver_nit, receiver_name, amount, tax_amount, currency, status, metadata, created_at')
+        .select('id, cufe, number, prefix, document_type, document_group, issue_date, reception_date, issuer_nit, issuer_name, receiver_nit, receiver_name, amount, tax_amount, currency, status, metadata, created_at, siigo_purchase_id, siigo_synced_at')
         .order('issue_date', { ascending: false })
         .range(offset, offset + PAGE_SIZE - 1);
 
       if (group) query = query.eq('document_group', group);
+
+      if (siigoStatus === 'synced') {
+        query = query.not('siigo_purchase_id', 'is', null).neq('siigo_purchase_id', 'DESCARTADO');
+      } else if (siigoStatus === 'pending') {
+        query = query.is('siigo_purchase_id', null);
+      } else if (siigoStatus === 'discarded') {
+        query = query.eq('siigo_purchase_id', 'DESCARTADO');
+      }
 
       if (month) {
         const [y, mon] = month.split('-');

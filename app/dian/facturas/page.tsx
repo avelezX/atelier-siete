@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
-import { FileText, Search, TrendingUp, ChevronDown, ChevronUp, X, ArrowDownToLine, ArrowUpFromLine, RefreshCw, CheckCircle2, Clock, Loader2, AlertCircle } from 'lucide-react';
+import { FileText, Search, TrendingUp, ChevronDown, ChevronUp, X, ArrowDownToLine, ArrowUpFromLine, RefreshCw, CheckCircle2, Clock, Loader2, AlertCircle, Ban, GitMerge } from 'lucide-react';
 import { formatCurrency } from '@/lib/utils';
 
 interface DianDocument {
@@ -41,6 +41,7 @@ interface SyncResult {
 }
 
 type Tab = 'Recibido' | 'Emitido';
+type SiigoStatus = 'all' | 'synced' | 'pending' | 'discarded';
 
 function formatDate(dateStr: string): string {
   const [year, month, day] = dateStr.split('-');
@@ -83,14 +84,24 @@ export default function DianFacturasPage() {
   const [search, setSearch] = useState('');
   const [selectedYear, setSelectedYear] = useState('');
   const [selectedMonth, setSelectedMonth] = useState('');
+  const [siigoStatus, setSiigoStatus] = useState<SiigoStatus>('all');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [prefixFilter, setPrefixFilter] = useState('');
 
-  // Sync state (only Compras tab)
+  // Sync state
+  const [syncYear, setSyncYear] = useState('');
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
   const [syncError, setSyncError] = useState('');
+
+  // Backfill state
+  const [backfilling, setBackfilling] = useState(false);
+  const [backfillResult, setBackfillResult] = useState<{ matched: number; checked: number } | null>(null);
+  const [backfillError, setBackfillError] = useState('');
+
+  // Discard state
+  const [discardingIds, setDiscardingIds] = useState<Set<string>>(new Set());
 
   const fetchDocuments = useCallback(async () => {
     setLoading(true);
@@ -105,6 +116,7 @@ export default function DianFacturasPage() {
       } else if (selectedYear) {
         params.set('year', selectedYear);
       }
+      if (siigoStatus !== 'all') params.set('siigoStatus', siigoStatus);
       const res = await fetch(`/api/dian?${params.toString()}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Error cargando documentos DIAN');
@@ -115,7 +127,7 @@ export default function DianFacturasPage() {
     } finally {
       setLoading(false);
     }
-  }, [activeTab, search, selectedYear, selectedMonth]);
+  }, [activeTab, search, selectedYear, selectedMonth, siigoStatus]);
 
   useEffect(() => {
     const timer = setTimeout(fetchDocuments, 300);
@@ -128,9 +140,12 @@ export default function DianFacturasPage() {
     setSearch('');
     setSelectedYear('');
     setSelectedMonth('');
+    setSiigoStatus('all');
     setPrefixFilter('');
     setSyncResult(null);
     setSyncError('');
+    setBackfillResult(null);
+    setBackfillError('');
   };
 
   const handleSync = async () => {
@@ -139,8 +154,7 @@ export default function DianFacturasPage() {
     setSyncError('');
     try {
       const body: Record<string, string> = {};
-      if (selectedYear && selectedMonth) body.month = `${selectedYear}-${selectedMonth}`;
-      else if (selectedYear) body.year = selectedYear;
+      if (syncYear) body.year = syncYear;
       const res = await fetch('/api/siigo/purchases/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -157,8 +171,56 @@ export default function DianFacturasPage() {
     }
   };
 
-  const hasFilters = search || selectedYear || selectedMonth || prefixFilter;
-  const clearFilters = () => { setSearch(''); setSelectedYear(''); setSelectedMonth(''); setPrefixFilter(''); };
+  const handleBackfill = async () => {
+    setBackfilling(true);
+    setBackfillResult(null);
+    setBackfillError('');
+    try {
+      const res = await fetch('/api/siigo/purchases/backfill', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Error en identificación');
+      setBackfillResult(data);
+      if (data.matched > 0) fetchDocuments();
+    } catch (e: any) {
+      setBackfillError(e.message);
+    } finally {
+      setBackfilling(false);
+    }
+  };
+
+  const handleDiscard = async (ids: string[]) => {
+    setDiscardingIds(prev => new Set([...prev, ...ids]));
+    try {
+      const res = await fetch('/api/siigo/purchases/discard', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      });
+      if (!res.ok) throw new Error('Error al descartar');
+      fetchDocuments();
+    } catch (e: any) {
+      console.error('Discard error:', e.message);
+    } finally {
+      setDiscardingIds(prev => { const s = new Set(prev); ids.forEach(id => s.delete(id)); return s; });
+    }
+  };
+
+  const handle409Discard = () => {
+    if (!syncResult) return;
+    const error409Folios = new Set(
+      syncResult.errors.filter(e => e.error.includes('409')).map(e => e.folio)
+    );
+    const ids = documents
+      .filter(d => {
+        const folio = d.prefix ? `${d.prefix}-${d.number}` : d.number;
+        return error409Folios.has(folio) && !d.siigo_purchase_id;
+      })
+      .map(d => d.id);
+    if (ids.length > 0) handleDiscard(ids);
+  };
+
+  const hasFilters = search || selectedYear || selectedMonth || prefixFilter || siigoStatus !== 'all';
+  const clearFilters = () => { setSearch(''); setSelectedYear(''); setSelectedMonth(''); setPrefixFilter(''); setSiigoStatus('all'); };
 
   const isCompras = activeTab === 'Recibido';
 
@@ -183,15 +245,24 @@ export default function DianFacturasPage() {
   const totalPages = Math.ceil(filteredDocuments.length / PAGE_SIZE);
   const paginatedDocuments = filteredDocuments.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
-  const pendingCount = isCompras
-    ? documents.filter(d => !d.siigo_purchase_id).length
-    : 0;
+  const syncedCount = documents.filter(d => d.siigo_purchase_id && d.siigo_purchase_id !== 'DESCARTADO').length;
+  const pendingCount = documents.filter(d => !d.siigo_purchase_id).length;
+  const discardedCount = documents.filter(d => d.siigo_purchase_id === 'DESCARTADO').length;
+
+  const errors409Count = syncResult?.errors.filter(e => e.error.includes('409')).length ?? 0;
+
+  const STATUS_FILTERS: { value: SiigoStatus; label: string; count?: number }[] = [
+    { value: 'all', label: 'Todos' },
+    { value: 'synced', label: 'En Siigo', count: syncedCount },
+    { value: 'pending', label: 'Solo DIAN', count: pendingCount },
+    { value: 'discarded', label: 'Descartadas', count: discardedCount },
+  ];
 
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
       <div className="bg-white border-b border-gray-200 px-8 py-6">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-4">
           <div className="flex items-center space-x-3">
             <FileText className="w-7 h-7 text-amber-600" />
             <div>
@@ -200,15 +271,37 @@ export default function DianFacturasPage() {
             </div>
           </div>
           {isCompras && (
-            <button
-              onClick={handleSync}
-              disabled={syncing || pendingCount === 0}
-              className="flex items-center space-x-2 px-4 py-2 text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {syncing
-                ? <><Loader2 className="w-4 h-4 animate-spin" /><span>Sincronizando...</span></>
-                : <><RefreshCw className="w-4 h-4" /><span>Sync Siigo{pendingCount > 0 ? ` (${pendingCount})` : ''}</span></>}
-            </button>
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* Backfill */}
+              <button
+                onClick={handleBackfill}
+                disabled={backfilling}
+                className="flex items-center space-x-2 px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {backfilling
+                  ? <><Loader2 className="w-4 h-4 animate-spin" /><span>Identificando...</span></>
+                  : <><GitMerge className="w-4 h-4" /><span>Identificar existentes</span></>}
+              </button>
+              {/* Sync with year filter */}
+              <div className="flex items-center gap-1">
+                <select
+                  value={syncYear}
+                  onChange={(e) => setSyncYear(e.target.value)}
+                  className="text-sm text-gray-900 border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                >
+                  {YEARS.map(y => <option key={y.value} value={y.value}>{y.label}</option>)}
+                </select>
+                <button
+                  onClick={handleSync}
+                  disabled={syncing}
+                  className="flex items-center space-x-2 px-4 py-2 text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                >
+                  {syncing
+                    ? <><Loader2 className="w-4 h-4 animate-spin" /><span>Sincronizando...</span></>
+                    : <><RefreshCw className="w-4 h-4" /><span>Sync Siigo{syncYear ? ` · ${syncYear}` : ' · todos'}</span></>}
+                </button>
+              </div>
+            </div>
           )}
         </div>
       </div>
@@ -243,12 +336,34 @@ export default function DianFacturasPage() {
 
       <div className="px-8 py-6 space-y-6">
 
-        {/* Sync result banners */}
+        {/* Banners */}
         {syncError && (
           <div className="flex items-start space-x-3 bg-red-50 border border-red-200 text-red-800 rounded-xl px-5 py-4 text-sm">
             <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
             <p>{syncError}</p>
             <button onClick={() => setSyncError('')} className="ml-auto text-red-400 hover:text-red-600"><X className="w-4 h-4" /></button>
+          </div>
+        )}
+
+        {backfillError && (
+          <div className="flex items-start space-x-3 bg-red-50 border border-red-200 text-red-800 rounded-xl px-5 py-4 text-sm">
+            <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+            <p>{backfillError}</p>
+            <button onClick={() => setBackfillError('')} className="ml-auto text-red-400 hover:text-red-600"><X className="w-4 h-4" /></button>
+          </div>
+        )}
+
+        {backfillResult && (
+          <div className="flex items-center justify-between bg-blue-50 border border-blue-200 text-blue-800 rounded-xl px-5 py-4 text-sm">
+            <div className="flex items-center space-x-2">
+              <GitMerge className="w-5 h-5" />
+              <p>
+                {backfillResult.matched > 0
+                  ? <><strong>{backfillResult.matched}</strong> facturas identificadas en Siigo (de {backfillResult.checked} revisadas)</>
+                  : <>Ninguna factura nueva identificada ({backfillResult.checked} revisadas)</>}
+              </p>
+            </div>
+            <button onClick={() => setBackfillResult(null)} className="text-blue-400 hover:text-blue-600"><X className="w-4 h-4" /></button>
           </div>
         )}
 
@@ -268,20 +383,31 @@ export default function DianFacturasPage() {
               <button onClick={() => setSyncResult(null)} className="text-gray-400 hover:text-gray-600"><X className="w-4 h-4" /></button>
             </div>
             {syncResult.errors.length > 0 && (
-              <div className="mt-2 max-h-40 overflow-y-auto space-y-1">
-                {syncResult.errors.map((e, i) => (
-                  <p key={i} className="text-xs text-yellow-700">
-                    <span className="font-mono font-semibold">{e.folio}</span> ({e.issuer}) — {e.error}
-                  </p>
-                ))}
-              </div>
+              <>
+                <div className="mt-2 max-h-40 overflow-y-auto space-y-1">
+                  {syncResult.errors.map((e, i) => (
+                    <p key={i} className="text-xs text-yellow-700">
+                      <span className="font-mono font-semibold">{e.folio}</span> ({e.issuer}) — {e.error}
+                    </p>
+                  ))}
+                </div>
+                {errors409Count > 0 && (
+                  <button
+                    onClick={handle409Discard}
+                    className="flex items-center space-x-1 text-xs font-medium text-yellow-800 bg-yellow-100 hover:bg-yellow-200 border border-yellow-300 rounded-lg px-3 py-1.5 mt-2"
+                  >
+                    <Ban className="w-3.5 h-3.5" />
+                    <span>Descartar {errors409Count} con período bloqueado (409)</span>
+                  </button>
+                )}
+              </>
             )}
           </div>
         )}
 
         {/* Summary Cards */}
         {displaySummary && (
-          <div className={`grid grid-cols-1 gap-4 ${isCompras ? 'md:grid-cols-4' : 'md:grid-cols-3'}`}>
+          <div className={`grid grid-cols-2 gap-4 ${isCompras ? 'md:grid-cols-5' : 'md:grid-cols-3'}`}>
             <div className="bg-white rounded-xl border border-gray-200 p-4">
               <div className="flex items-center space-x-3">
                 <div className="w-10 h-10 bg-amber-100 rounded-lg flex items-center justify-center">
@@ -316,20 +442,33 @@ export default function DianFacturasPage() {
               </div>
             </div>
             {isCompras && (
-              <div className="bg-white rounded-xl border border-gray-200 p-4">
-                <div className="flex items-center space-x-3">
-                  <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
-                    <CheckCircle2 className="w-5 h-5 text-green-600" />
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500">En Siigo</p>
-                    <p className="text-xl font-bold text-green-700">
-                      {documents.filter(d => d.siigo_purchase_id && d.siigo_purchase_id !== 'DESCARTADO').length}
-                      <span className="text-sm font-normal text-gray-400 ml-1">/ {documents.length}</span>
-                    </p>
+              <>
+                <div className="bg-white rounded-xl border border-gray-200 p-4">
+                  <div className="flex items-center space-x-3">
+                    <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
+                      <CheckCircle2 className="w-5 h-5 text-green-600" />
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500">En Siigo</p>
+                      <p className="text-xl font-bold text-green-700">
+                        {syncedCount}
+                        <span className="text-sm font-normal text-gray-400 ml-1">/ {documents.length}</span>
+                      </p>
+                    </div>
                   </div>
                 </div>
-              </div>
+                <div className="bg-white rounded-xl border border-gray-200 p-4">
+                  <div className="flex items-center space-x-3">
+                    <div className="w-10 h-10 bg-orange-100 rounded-lg flex items-center justify-center">
+                      <Clock className="w-5 h-5 text-orange-500" />
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500">Pendientes</p>
+                      <p className="text-xl font-bold text-orange-600">{pendingCount}</p>
+                    </div>
+                  </div>
+                </div>
+              </>
             )}
           </div>
         )}
@@ -368,6 +507,27 @@ export default function DianFacturasPage() {
               </button>
             )}
           </div>
+
+          {/* Status filter — solo en Compras */}
+          {isCompras && (
+            <div className="flex flex-wrap gap-2 items-center pt-1 border-t border-gray-100">
+              <span className="text-xs text-gray-400 font-medium">Estado:</span>
+              {STATUS_FILTERS.map(f => (
+                <button
+                  key={f.value}
+                  onClick={() => { setSiigoStatus(f.value); setCurrentPage(1); }}
+                  className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
+                    siigoStatus === f.value
+                      ? 'bg-amber-600 text-white border-amber-600'
+                      : 'bg-white text-gray-600 border-gray-200 hover:border-amber-400'
+                  }`}
+                >
+                  {f.label}{f.count !== undefined && siigoStatus === 'all' ? ` (${f.count})` : ''}
+                </button>
+              ))}
+            </div>
+          )}
+
           {availablePrefixes.length > 0 && (
             <div className="flex flex-wrap gap-2 items-center pt-1 border-t border-gray-100">
               <span className="text-xs text-gray-400 font-medium">Tipo:</span>
@@ -398,11 +558,11 @@ export default function DianFacturasPage() {
             </div>
           ) : error ? (
             <div className="flex items-center justify-center py-16 text-red-500 text-sm">{error}</div>
-          ) : documents.length === 0 ? (
+          ) : filteredDocuments.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-gray-400">
               <FileText className="w-10 h-10 mb-2" />
-              <p className="text-sm">No hay facturas {isCompras ? 'de compra' : 'de venta'} importadas</p>
-              <p className="text-xs mt-1">Ve a <strong>DIAN → Importar</strong> para subir el reporte</p>
+              <p className="text-sm">No hay facturas {isCompras ? 'de compra' : 'de venta'} en esta vista</p>
+              {siigoStatus === 'all' && <p className="text-xs mt-1">Ve a <strong>DIAN → Importar</strong> para subir el reporte</p>}
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -427,9 +587,11 @@ export default function DianFacturasPage() {
                 <tbody className="divide-y divide-gray-100">
                   {paginatedDocuments.map((doc) => {
                     const isSynced = isCompras && !!doc.siigo_purchase_id && doc.siigo_purchase_id !== 'DESCARTADO';
+                    const isDiscarded = doc.siigo_purchase_id === 'DESCARTADO';
+                    const isDiscarding = discardingIds.has(doc.id);
                     return (
                       <Fragment key={doc.id}>
-                        <tr className="hover:bg-gray-50 transition-colors">
+                        <tr className={`hover:bg-gray-50 transition-colors ${isDiscarded ? 'opacity-50' : ''}`}>
                           <td className="px-4 py-3 font-mono text-xs text-amber-700 font-medium">
                             {doc.prefix ? `${doc.prefix}-${doc.number}` : doc.number}
                           </td>
@@ -444,7 +606,11 @@ export default function DianFacturasPage() {
                           <td className="px-4 py-3 text-right font-semibold text-gray-900">{formatCurrency(doc.amount)}</td>
                           {isCompras ? (
                             <td className="px-4 py-3 text-center">
-                              {isSynced ? (
+                              {isDiscarded ? (
+                                <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
+                                  <Ban className="w-3 h-3" /><span>Descartada</span>
+                                </span>
+                              ) : isSynced ? (
                                 <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
                                   <CheckCircle2 className="w-3 h-3" /><span>Siigo</span>
                                 </span>
@@ -510,6 +676,19 @@ export default function DianFacturasPage() {
                                     </div>
                                   </div>
                                 )}
+                                {/* Discard action for pending compras */}
+                                {isCompras && !isSynced && !isDiscarded && (
+                                  <div className="col-span-2 md:col-span-4 pt-2 border-t border-amber-200">
+                                    <button
+                                      onClick={() => handleDiscard([doc.id])}
+                                      disabled={isDiscarding}
+                                      className="flex items-center space-x-1 text-xs font-medium text-gray-500 hover:text-red-600 disabled:opacity-50"
+                                    >
+                                      {isDiscarding ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Ban className="w-3.5 h-3.5" />}
+                                      <span>Descartar esta factura</span>
+                                    </button>
+                                  </div>
+                                )}
                               </div>
                             </td>
                           </tr>
@@ -518,6 +697,20 @@ export default function DianFacturasPage() {
                     );
                   })}
                 </tbody>
+                <tfoot>
+                  <tr className="bg-gray-50 border-t-2 border-gray-200 font-semibold">
+                    <td colSpan={4} className="px-4 py-3 text-xs text-gray-500 uppercase">
+                      Total ({filteredDocuments.length} facturas)
+                    </td>
+                    <td className="px-4 py-3 text-right text-sm text-gray-700">
+                      {formatCurrency(filteredDocuments.reduce((s, d) => s + (d.tax_amount || 0), 0))}
+                    </td>
+                    <td className="px-4 py-3 text-right text-sm text-gray-900">
+                      {formatCurrency(filteredDocuments.reduce((s, d) => s + (d.amount || 0), 0))}
+                    </td>
+                    <td colSpan={2} />
+                  </tr>
+                </tfoot>
               </table>
             </div>
           )}

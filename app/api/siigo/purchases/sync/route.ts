@@ -77,7 +77,7 @@ function resolveAccountCode(issuerName: string): { code: string; label: string }
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
-    const { month } = body as { month?: string };
+    const { month, year } = body as { month?: string; year?: string };
 
     // 1. Cargar catálogos Siigo
     const [documentTypes, paymentTypes] = await Promise.all([
@@ -105,10 +105,12 @@ export async function POST(req: Request) {
       .order('issue_date', { ascending: true });
 
     if (month) {
-      const [year, mon] = month.split('-');
+      const [y, mon] = month.split('-');
       const startDate = `${month}-01`;
-      const endDate = new Date(parseInt(year), parseInt(mon), 0).toISOString().split('T')[0];
+      const endDate = new Date(parseInt(y), parseInt(mon), 0).toISOString().split('T')[0];
       query = query.gte('issue_date', startDate).lte('issue_date', endDate);
+    } else if (year) {
+      query = query.gte('issue_date', `${year}-01-01`).lte('issue_date', `${year}-12-31`);
     }
 
     const { data: pending, error: fetchError } = await query;
