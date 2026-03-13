@@ -353,6 +353,47 @@ export interface SiigoDocumentType {
   consecutive?: number;
 }
 
+// --- Create Purchase Request / Response ---
+
+export interface SiigoCreatePurchaseRequest {
+  document: { id: number };
+  date: string;
+  supplier: {
+    identification: string;
+    branch_office?: number;
+  };
+  provider_invoice?: {
+    prefix?: string;
+    number?: string;
+  };
+  items: Array<{
+    type?: 'Product' | 'FixedAsset' | 'Account';
+    code: string;
+    description?: string;
+    quantity: number;
+    price: number;
+    discount?: number;
+    taxes?: Array<{ id: number }>;
+  }>;
+  payments: Array<{
+    id: number;
+    value: number;
+    due_date?: string;
+  }>;
+  observations?: string;
+}
+
+export interface SiigoCreatePurchaseResponse {
+  id?: string;
+  document?: { id: number };
+  number?: number;
+  name?: string;
+  date?: string;
+  total?: number;
+  balance?: number;
+  errors?: Array<{ Code: string; Message: string }>;
+}
+
 // --- Create Journal Request / Response ---
 
 export interface SiigoCreateJournalItem {

@@ -6,6 +6,7 @@ import {
   LayoutDashboard,
   FileText,
   FileMinus2,
+  Plus,
   Package,
   Users,
   Settings,
@@ -24,6 +25,11 @@ import {
   Warehouse,
   Scale,
   Shield,
+  Upload,
+  Building2,
+  ShoppingCart,
+  CreditCard,
+  FileStack,
 } from "lucide-react";
 
 interface MenuItem {
@@ -57,9 +63,27 @@ const menuSections: MenuSection[] = [
     ]
   },
   {
+    title: "Bancos",
+    items: [
+      { name: "Extractos", href: "/bancos/extractos", icon: FileStack },
+      { name: "Transacciones", href: "/bancos/transacciones", icon: CreditCard },
+      { name: "Importar", href: "/bancos/importar", icon: Upload },
+    ]
+  },
+  {
+    title: "DIAN",
+    items: [
+      { name: "Facturas DIAN", href: "/dian/facturas", icon: Building2 },
+      { name: "Reportes DIAN", href: "/dian/reportes", icon: BarChart3 },
+      { name: "Importar DIAN", href: "/dian/importar", icon: Upload },
+    ]
+  },
+  {
     title: "Siigo",
     items: [
       { name: "Facturas", href: "/invoices", icon: FileText },
+      { name: "Crear Factura", href: "/invoices/crear", icon: Plus },
+      { name: "Crear Factura Compra", href: "/purchases/crear", icon: ShoppingCart },
       { name: "Notas Credito", href: "/credit-notes", icon: FileMinus2 },
       { name: "Productos", href: "/products", icon: Package },
       { name: "Clientes", href: "/customers", icon: Users },
