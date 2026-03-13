@@ -48,9 +48,7 @@ function cellValue(sheet: XLSX.WorkSheet, row: number, col: number): string {
 }
 
 function extractYearFromFilename(filename: string): number {
-  const match = filename.match(/(\d{4})\.\w+$/);
-  if (match) return parseInt(match[1]);
-  const yearMatch = filename.match(/20\d{2}/);
+  const yearMatch = filename.match(/20[2-3]\d/);
   if (yearMatch) return parseInt(yearMatch[0]);
   return new Date().getFullYear();
 }

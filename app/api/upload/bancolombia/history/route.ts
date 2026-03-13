@@ -4,18 +4,25 @@ import { supabaseAdmin, atelierTableAdmin } from '@/lib/supabase';
 export const runtime = 'nodejs';
 
 export async function GET() {
-  // Get all periods from transactions table
-  const { data: periods } = await atelierTableAdmin('transactions')
-    .select('period')
-    .order('period', { ascending: false });
-
-  if (!periods) return NextResponse.json({ entries: [] });
-
-  // Count transactions per period
+  // Paginate through all transactions to get accurate period counts
   const periodCounts: Record<string, number> = {};
-  for (const row of periods) {
-    periodCounts[row.period] = (periodCounts[row.period] || 0) + 1;
+  const PAGE_SIZE = 1000;
+  let offset = 0;
+
+  while (true) {
+    const { data } = await atelierTableAdmin('transactions')
+      .select('period')
+      .range(offset, offset + PAGE_SIZE - 1);
+
+    if (!data || data.length === 0) break;
+    for (const row of data) {
+      periodCounts[row.period] = (periodCounts[row.period] || 0) + 1;
+    }
+    if (data.length < PAGE_SIZE) break;
+    offset += PAGE_SIZE;
   }
+
+  if (Object.keys(periodCounts).length === 0) return NextResponse.json({ entries: [] });
 
   // List files from storage
   const { data: folders } = await supabaseAdmin.storage

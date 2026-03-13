@@ -10,22 +10,23 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 interface PageProps {
-  searchParams: {
+  searchParams: Promise<{
     page?: string;
     search?: string;
     type?: string;
     year?: string;
     month?: string;
-  };
+  }>;
 }
 
 export default async function TransaccionesPage({ searchParams }: PageProps) {
-  const page = parseInt(searchParams.page || '1');
+  const params = await searchParams;
+  const page = parseInt(params.page || '1');
   const pageSize = 50;
-  const searchQuery = searchParams.search || '';
-  const typeFilter = searchParams.type || 'all';
-  const yearFilter = searchParams.year || '';
-  const monthFilter = searchParams.month || '';
+  const searchQuery = params.search || '';
+  const typeFilter = params.type || 'all';
+  const yearFilter = params.year || '';
+  const monthFilter = params.month || '';
 
   let query = atelierTableAdmin('transactions')
     .select('*', { count: 'exact' })
@@ -134,7 +135,7 @@ export default async function TransaccionesPage({ searchParams }: PageProps) {
                   transactions.map((t: any) => (
                     <tr key={t.id} className="hover:bg-gray-50 transition-colors">
                       <td className="px-5 py-3 whitespace-nowrap text-sm text-gray-700">
-                        {new Date(t.date).toLocaleDateString('es-CO', { year: 'numeric', month: 'short', day: 'numeric' })}
+                        {new Date(t.date + 'T12:00:00').toLocaleDateString('es-CO', { year: 'numeric', month: 'short', day: 'numeric' })}
                       </td>
                       <td className="px-5 py-3 text-sm text-gray-900">
                         <div className="max-w-xs">

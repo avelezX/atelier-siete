@@ -67,8 +67,9 @@ function formatMonthTitle(month: string): string {
 export default async function ExtractosPage({
   searchParams,
 }: {
-  searchParams: { month?: string };
+  searchParams: Promise<{ month?: string }>;
 }) {
+  const params = await searchParams;
   const availableMonths = await getAvailableMonths();
 
   if (availableMonths.length === 0) {
@@ -83,7 +84,7 @@ export default async function ExtractosPage({
     );
   }
 
-  const selectedMonth = searchParams.month || availableMonths[0];
+  const selectedMonth = params.month || availableMonths[0];
   const transactions = await getMonthTransactions(selectedMonth);
 
   let openingBalance = 0;
