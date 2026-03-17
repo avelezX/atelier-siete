@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
-import { FileText, Search, TrendingUp, ChevronDown, ChevronUp, X, ArrowDownToLine, ArrowUpFromLine, RefreshCw, CheckCircle2, Clock, Loader2, AlertCircle, Ban, GitMerge } from 'lucide-react';
+import { FileText, Search, TrendingUp, ChevronDown, ChevronUp, X, ArrowDownToLine, ArrowUpFromLine, RefreshCw, CheckCircle2, Clock, Loader2, AlertCircle, Ban, GitMerge, RotateCcw } from 'lucide-react';
 import { formatCurrency } from '@/lib/utils';
 
 interface DianDocument {
@@ -40,12 +40,21 @@ interface SyncResult {
   message?: string;
 }
 
-type Tab = 'Recibido' | 'Emitido';
+type Tab = 'Facturas' | 'NotasCredito' | 'Emitido';
 type SiigoStatus = 'all' | 'synced' | 'pending' | 'discarded';
 
 function formatDate(dateStr: string): string {
   const [year, month, day] = dateStr.split('-');
   return `${day}/${month}/${year}`;
+}
+
+function getDocTypeBadge(type: string): { label: string; className: string } {
+  const t = (type || '').toLowerCase();
+  if (t.includes('nota cr') || t.includes('nota credito') || t.includes('nota crédito'))
+    return { label: 'NC', className: 'bg-teal-100 text-teal-700' };
+  if (t.includes('nota d') || t.includes('nota debito') || t.includes('nota débito'))
+    return { label: 'ND', className: 'bg-purple-100 text-purple-700' };
+  return { label: 'FE', className: 'bg-amber-100 text-amber-700' };
 }
 
 function getAvailableYears() {
@@ -76,7 +85,7 @@ const MONTHS = [
 const PAGE_SIZE = 100;
 
 export default function DianFacturasPage() {
-  const [activeTab, setActiveTab] = useState<Tab>('Recibido');
+  const [activeTab, setActiveTab] = useState<Tab>('Facturas');
   const [documents, setDocuments] = useState<DianDocument[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -109,7 +118,15 @@ export default function DianFacturasPage() {
     setCurrentPage(1);
     try {
       const params = new URLSearchParams();
-      params.set('group', activeTab);
+      if (activeTab === 'Facturas') {
+        params.set('group', 'Recibido');
+        params.set('docType', 'factura');
+      } else if (activeTab === 'NotasCredito') {
+        params.set('group', 'Recibido');
+        params.set('docType', 'nota_credito');
+      } else {
+        params.set('group', 'Emitido');
+      }
       if (search) params.set('search', search);
       if (selectedYear && selectedMonth) {
         params.set('month', `${selectedYear}-${selectedMonth}`);
@@ -222,7 +239,9 @@ export default function DianFacturasPage() {
   const hasFilters = search || selectedYear || selectedMonth || prefixFilter || siigoStatus !== 'all';
   const clearFilters = () => { setSearch(''); setSelectedYear(''); setSelectedMonth(''); setPrefixFilter(''); setSiigoStatus('all'); };
 
-  const isCompras = activeTab === 'Recibido';
+  // Tab roles
+  const isFacturas = activeTab === 'Facturas';       // has sync/backfill/discard actions
+  const isRecibido = activeTab === 'Facturas' || activeTab === 'NotasCredito'; // shows issuer, not receiver
 
   const availablePrefixes = useMemo(() => {
     const set = new Set<string>();
@@ -258,6 +277,12 @@ export default function DianFacturasPage() {
     { value: 'discarded', label: 'Descartadas', count: discardedCount },
   ];
 
+  const tabEmptyLabel = activeTab === 'Facturas'
+    ? 'facturas de compra'
+    : activeTab === 'NotasCredito'
+    ? 'notas crédito recibidas'
+    : 'facturas de venta';
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
@@ -270,7 +295,7 @@ export default function DianFacturasPage() {
               <p className="text-sm text-gray-500 mt-0.5">Documentos electrónicos importados del portal DIAN</p>
             </div>
           </div>
-          {isCompras && (
+          {isFacturas && (
             <div className="flex items-center gap-2 flex-wrap">
               {/* Backfill */}
               <button
@@ -303,6 +328,13 @@ export default function DianFacturasPage() {
               </div>
             </div>
           )}
+          {activeTab === 'NotasCredito' && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-400 bg-gray-100 border border-gray-200 rounded-lg px-3 py-2">
+                Sync Notas Crédito — próximamente
+              </span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -310,15 +342,26 @@ export default function DianFacturasPage() {
       <div className="bg-white border-b border-gray-200 px-8">
         <div className="flex space-x-0">
           <button
-            onClick={() => handleTabChange('Recibido')}
+            onClick={() => handleTabChange('Facturas')}
             className={`flex items-center space-x-2 px-5 py-3 text-sm font-medium border-b-2 transition-colors ${
-              activeTab === 'Recibido'
+              activeTab === 'Facturas'
                 ? 'border-amber-600 text-amber-700'
                 : 'border-transparent text-gray-600 hover:text-gray-900'
             }`}
           >
             <ArrowDownToLine className="w-4 h-4" />
             <span>Compras (Recibidas)</span>
+          </button>
+          <button
+            onClick={() => handleTabChange('NotasCredito')}
+            className={`flex items-center space-x-2 px-5 py-3 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'NotasCredito'
+                ? 'border-teal-600 text-teal-700'
+                : 'border-transparent text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            <RotateCcw className="w-4 h-4" />
+            <span>Notas Crédito</span>
           </button>
           <button
             onClick={() => handleTabChange('Emitido')}
@@ -407,14 +450,16 @@ export default function DianFacturasPage() {
 
         {/* Summary Cards */}
         {displaySummary && (
-          <div className={`grid grid-cols-2 gap-4 ${isCompras ? 'md:grid-cols-5' : 'md:grid-cols-3'}`}>
+          <div className={`grid grid-cols-2 gap-4 ${isFacturas ? 'md:grid-cols-5' : 'md:grid-cols-3'}`}>
             <div className="bg-white rounded-xl border border-gray-200 p-4">
               <div className="flex items-center space-x-3">
                 <div className="w-10 h-10 bg-amber-100 rounded-lg flex items-center justify-center">
                   <FileText className="w-5 h-5 text-amber-600" />
                 </div>
                 <div>
-                  <p className="text-xs text-gray-500">{isCompras ? 'Facturas de compra' : 'Facturas de venta'}</p>
+                  <p className="text-xs text-gray-500">
+                    {activeTab === 'Facturas' ? 'Facturas de compra' : activeTab === 'NotasCredito' ? 'Notas crédito' : 'Facturas de venta'}
+                  </p>
                   <p className="text-xl font-bold text-gray-900">{displaySummary.total}</p>
                 </div>
               </div>
@@ -425,7 +470,9 @@ export default function DianFacturasPage() {
                   <TrendingUp className="w-5 h-5 text-amber-600" />
                 </div>
                 <div>
-                  <p className="text-xs text-gray-500">{isCompras ? 'Total compras' : 'Total ventas'}</p>
+                  <p className="text-xs text-gray-500">
+                    {isRecibido ? 'Total recibido' : 'Total ventas'}
+                  </p>
                   <p className="text-lg font-bold text-gray-900">{formatCurrency(displaySummary.totalAmount)}</p>
                 </div>
               </div>
@@ -436,12 +483,12 @@ export default function DianFacturasPage() {
                   <TrendingUp className="w-5 h-5 text-orange-600" />
                 </div>
                 <div>
-                  <p className="text-xs text-gray-500">{isCompras ? 'IVA descontable' : 'IVA generado'}</p>
+                  <p className="text-xs text-gray-500">{isRecibido ? 'IVA descontable' : 'IVA generado'}</p>
                   <p className="text-lg font-bold text-gray-900">{formatCurrency(displaySummary.totalIva)}</p>
                 </div>
               </div>
             </div>
-            {isCompras && (
+            {isFacturas && (
               <>
                 <div className="bg-white rounded-xl border border-gray-200 p-4">
                   <div className="flex items-center space-x-3">
@@ -480,7 +527,7 @@ export default function DianFacturasPage() {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
               <input
                 type="text"
-                placeholder={isCompras ? 'Buscar por emisor o folio...' : 'Buscar por receptor o folio...'}
+                placeholder={isRecibido ? 'Buscar por emisor o folio...' : 'Buscar por receptor o folio...'}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="w-full pl-9 pr-3 py-2 text-sm text-gray-900 placeholder-gray-400 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500"
@@ -508,8 +555,8 @@ export default function DianFacturasPage() {
             )}
           </div>
 
-          {/* Status filter — solo en Compras */}
-          {isCompras && (
+          {/* Status filter — solo en Facturas */}
+          {isFacturas && (
             <div className="flex flex-wrap gap-2 items-center pt-1 border-t border-gray-100">
               <span className="text-xs text-gray-400 font-medium">Estado:</span>
               {STATUS_FILTERS.map(f => (
@@ -561,7 +608,7 @@ export default function DianFacturasPage() {
           ) : filteredDocuments.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-gray-400">
               <FileText className="w-10 h-10 mb-2" />
-              <p className="text-sm">No hay facturas {isCompras ? 'de compra' : 'de venta'} en esta vista</p>
+              <p className="text-sm">No hay {tabEmptyLabel} en esta vista</p>
               {siigoStatus === 'all' && <p className="text-xs mt-1">Ve a <strong>DIAN → Importar</strong> para subir el reporte</p>}
             </div>
           ) : (
@@ -572,12 +619,12 @@ export default function DianFacturasPage() {
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Folio</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Fecha emisión</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">
-                      {isCompras ? 'Emisor (Proveedor)' : 'Receptor (Cliente)'}
+                      {isRecibido ? 'Emisor (Proveedor)' : 'Receptor (Cliente)'}
                     </th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">NIT</th>
                     <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase">IVA</th>
                     <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Total</th>
-                    {isCompras
+                    {isRecibido
                       ? <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Siigo</th>
                       : <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Estado</th>
                     }
@@ -586,25 +633,33 @@ export default function DianFacturasPage() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {paginatedDocuments.map((doc) => {
-                    const isSynced = isCompras && !!doc.siigo_purchase_id && doc.siigo_purchase_id !== 'DESCARTADO';
+                    const isSynced = isRecibido && !!doc.siigo_purchase_id && doc.siigo_purchase_id !== 'DESCARTADO';
                     const isDiscarded = doc.siigo_purchase_id === 'DESCARTADO';
                     const isDiscarding = discardingIds.has(doc.id);
+                    const badge = getDocTypeBadge(doc.document_type);
                     return (
                       <Fragment key={doc.id}>
                         <tr className={`hover:bg-gray-50 transition-colors ${isDiscarded ? 'opacity-50' : ''}`}>
-                          <td className="px-4 py-3 font-mono text-xs text-amber-700 font-medium">
-                            {doc.prefix ? `${doc.prefix}-${doc.number}` : doc.number}
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-1.5">
+                              <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${badge.className}`}>
+                                {badge.label}
+                              </span>
+                              <span className="font-mono text-xs text-amber-700 font-medium">
+                                {doc.prefix ? `${doc.prefix}-${doc.number}` : doc.number}
+                              </span>
+                            </div>
                           </td>
                           <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{formatDate(doc.issue_date)}</td>
-                          <td className="px-4 py-3 text-gray-900 max-w-[220px] truncate" title={isCompras ? doc.issuer_name : doc.receiver_name}>
-                            {isCompras ? doc.issuer_name : doc.receiver_name}
+                          <td className="px-4 py-3 text-gray-900 max-w-[220px] truncate" title={isRecibido ? doc.issuer_name : doc.receiver_name}>
+                            {isRecibido ? doc.issuer_name : doc.receiver_name}
                           </td>
                           <td className="px-4 py-3 text-gray-500 font-mono text-xs">
-                            {isCompras ? doc.issuer_nit : doc.receiver_nit}
+                            {isRecibido ? doc.issuer_nit : doc.receiver_nit}
                           </td>
                           <td className="px-4 py-3 text-right text-gray-500">{formatCurrency(doc.tax_amount)}</td>
                           <td className="px-4 py-3 text-right font-semibold text-gray-900">{formatCurrency(doc.amount)}</td>
-                          {isCompras ? (
+                          {isRecibido ? (
                             <td className="px-4 py-3 text-center">
                               {isDiscarded ? (
                                 <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
@@ -649,16 +704,16 @@ export default function DianFacturasPage() {
                                   <p className="text-gray-700">{doc.reception_date ? doc.reception_date.replace('T', ' ') : '—'}</p>
                                 </div>
                                 <div>
-                                  <p className="text-gray-500 font-medium mb-1">{isCompras ? 'Receptor' : 'Emisor'}</p>
+                                  <p className="text-gray-500 font-medium mb-1">{isRecibido ? 'Receptor' : 'Emisor'}</p>
                                   <p className="text-gray-700">
-                                    {isCompras ? `${doc.receiver_name} (${doc.receiver_nit})` : `${doc.issuer_name} (${doc.issuer_nit})`}
+                                    {isRecibido ? `${doc.receiver_name} (${doc.receiver_nit})` : `${doc.issuer_name} (${doc.issuer_nit})`}
                                   </p>
                                 </div>
                                 <div>
                                   <p className="text-gray-500 font-medium mb-1">Tipo documento</p>
                                   <p className="text-gray-700">{doc.document_type}</p>
                                 </div>
-                                {isCompras && isSynced && (
+                                {isRecibido && isSynced && (
                                   <div>
                                     <p className="text-gray-500 font-medium mb-1">ID Siigo</p>
                                     <p className="font-mono text-green-700 text-xs">{doc.siigo_purchase_id}</p>
@@ -676,8 +731,8 @@ export default function DianFacturasPage() {
                                     </div>
                                   </div>
                                 )}
-                                {/* Discard action for pending compras */}
-                                {isCompras && !isSynced && !isDiscarded && (
+                                {/* Discard action — solo para Facturas pendientes */}
+                                {isFacturas && !isSynced && !isDiscarded && (
                                   <div className="col-span-2 md:col-span-4 pt-2 border-t border-amber-200">
                                     <button
                                       onClick={() => handleDiscard([doc.id])}
@@ -700,7 +755,7 @@ export default function DianFacturasPage() {
                 <tfoot>
                   <tr className="bg-gray-50 border-t-2 border-gray-200 font-semibold">
                     <td colSpan={4} className="px-4 py-3 text-xs text-gray-500 uppercase">
-                      Total ({filteredDocuments.length} facturas)
+                      Total ({filteredDocuments.length} documentos)
                     </td>
                     <td className="px-4 py-3 text-right text-sm text-gray-700">
                       {formatCurrency(filteredDocuments.reduce((s, d) => s + (d.tax_amount || 0), 0))}

@@ -41,11 +41,11 @@ function resolveAccountCode(issuerName: string): { code: string; label: string }
 
   // ── Transporte / mensajería ────────────────────────────────
   if (/SERVIENTREGA|COORDINADORA|DEPRISA|FEDEX|DHL|TRANSPORTES|MENSAJERIA|FLETE/.test(n))
-    return { code: '51551001', label: 'Fletes y acarreos' };
+    return { code: '51959501', label: 'Otros gastos (transporte)' };
 
   // ── Publicidad ─────────────────────────────────────────────
   if (/PUBLICIDAD|MARKETING|AGENCIA|META |FACEBOOK|GOOGLE|INSTAGRAM/.test(n))
-    return { code: '51851001', label: 'Publicidad y propaganda' };
+    return { code: '51959501', label: 'Otros gastos (publicidad)' };
 
   // ── Mantenimiento y reparación ─────────────────────────────
   if (/MANTENIMIENTO|REPARACION|OBRA|PINTURA|ELECTRICO|PLOMERO|INSTALACION/.test(n))
@@ -86,14 +86,21 @@ export async function POST(req: Request) {
     ]);
 
     const fcTypes = Array.isArray(documentTypes) ? documentTypes : [];
-    const defaultDocType = fcTypes[0];
-    const defaultPayment = Array.isArray(paymentTypes) ? paymentTypes[0] : null;
+    // Usar "Compra" (no inventario) — primer FC type
+    const defaultDocType = fcTypes.find((t: any) => t.name === 'Compra') ?? fcTypes[0];
+
+    const paymentList = Array.isArray(paymentTypes) ? paymentTypes : [];
+    // Siempre registrar en Efectivo (id 316, CarteraProveedor)
+    const defaultPayment =
+      paymentList.find((p: any) => p.name === 'Efectivo') ??
+      paymentList.find((p: any) => p.id === 316) ??
+      null;
 
     if (!defaultDocType) {
       return NextResponse.json({ error: 'No se encontraron tipos de documento FC en Siigo.' }, { status: 422 });
     }
     if (!defaultPayment) {
-      return NextResponse.json({ error: 'No se encontraron formas de pago en Siigo.' }, { status: 422 });
+      return NextResponse.json({ error: 'No se encontró el método de pago Efectivo en Siigo.' }, { status: 422 });
     }
 
     // 2. Traer documentos DIAN pendientes (Recibido, tipo Factura, sin siigo_purchase_id)

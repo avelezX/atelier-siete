@@ -11,6 +11,7 @@ export async function GET(request: NextRequest) {
     const year = searchParams.get('year') ?? '';
     const search = searchParams.get('search') ?? '';
     const siigoStatus = searchParams.get('siigoStatus') ?? ''; // 'synced' | 'pending' | 'discarded'
+    const docType = searchParams.get('docType') ?? ''; // 'factura' | 'nota_credito'
 
     const PAGE_SIZE = 1000;
     let offset = 0;
@@ -24,6 +25,13 @@ export async function GET(request: NextRequest) {
         .range(offset, offset + PAGE_SIZE - 1);
 
       if (group) query = query.eq('document_group', group);
+
+      if (docType === 'factura') {
+        query = query.ilike('document_type', '%Factura%');
+      } else if (docType === 'nota_credito') {
+        // Filtra "Nota de crédito electrónica" y variantes — excluye Facturas y Notas Débito
+        query = query.ilike('document_type', '%cr_dito%');
+      }
 
       if (siigoStatus === 'synced') {
         query = query.not('siigo_purchase_id', 'is', null).neq('siigo_purchase_id', 'DESCARTADO');

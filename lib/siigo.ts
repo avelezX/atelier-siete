@@ -403,7 +403,7 @@ export async function createSupplier(nit: string, name: string): Promise<any> {
   const payload = {
     type: 'Customer',
     person_type: isCompany ? 'Company' : 'Person',
-    id_type: { code: isCompany ? '31' : '13' },
+    id_type: isCompany ? '31' : '13',
     identification: cleanNit,
     name: nameArray,
     active: true,
