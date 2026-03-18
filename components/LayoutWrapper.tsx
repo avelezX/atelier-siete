@@ -5,9 +5,9 @@ import Sidebar from './Sidebar';
 
 export default function LayoutWrapper({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const isLoginPage = pathname === '/login';
+  const noSidebar = pathname === '/login' || pathname.startsWith('/p/');
 
-  if (isLoginPage) {
+  if (noSidebar) {
     return <>{children}</>;
   }
 

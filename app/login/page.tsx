@@ -2,9 +2,10 @@
 
 import { useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Lock, LogIn } from 'lucide-react';
+import { LogIn } from 'lucide-react';
 
 function LoginForm() {
+  const [nit, setNit] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -21,20 +22,25 @@ function LoginForm() {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ nit, password }),
       });
 
       const data = await res.json();
 
       if (!res.ok) {
-        setError(data.error || 'Error de autenticacion');
+        setError(data.error || 'Usuario o contraseña incorrectos');
         return;
       }
 
-      router.push(from);
+      // Redirigir según rol
+      if (data.role === 'proveedor') {
+        router.push('/p/productos');
+      } else {
+        router.push(from);
+      }
       router.refresh();
     } catch {
-      setError('Error de conexion');
+      setError('Error de conexión');
     } finally {
       setLoading(false);
     }
@@ -49,47 +55,61 @@ function LoginForm() {
             <span className="text-white font-bold text-3xl">A</span>
           </div>
           <h1 className="text-2xl font-bold text-white">Atelier Siete</h1>
-          <p className="text-amber-100 text-sm mt-1">Muebles & Decoracion</p>
+          <p className="text-amber-100 text-sm mt-1">Muebles & Decoración</p>
         </div>
 
         {/* Form */}
-        <form onSubmit={handleSubmit} className="p-8">
-          <div className="mb-6">
-            <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-2">
-              <Lock className="w-4 h-4 inline mr-1" />
-              Clave de acceso
+        <form onSubmit={handleSubmit} className="p-8 space-y-4">
+          <div>
+            <label htmlFor="nit" className="block text-sm font-medium text-gray-700 mb-2">
+              Usuario (NIT)
             </label>
             <input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Ingresa la clave"
+              id="nit"
+              type="text"
+              value={nit}
+              onChange={(e) => setNit(e.target.value)}
+              placeholder="Ingresa tu NIT"
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none transition-colors text-gray-900"
               autoFocus
               required
             />
           </div>
 
+          <div>
+            <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-2">
+              Contraseña
+            </label>
+            <input
+              id="password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Ingresa tu contraseña"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none transition-colors text-gray-900"
+              required
+            />
+          </div>
+
           {error && (
-            <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">
+            <div className="px-4 py-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">
               {error}
             </div>
           )}
 
           <button
             type="submit"
-            disabled={loading || !password}
-            className="w-full flex items-center justify-center space-x-2 px-4 py-3 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors disabled:opacity-50 font-medium"
+            disabled={loading || !nit || !password}
+            className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors disabled:opacity-50 font-medium"
           >
-            <LogIn className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-            <span>{loading ? 'Verificando...' : 'Entrar'}</span>
+            <LogIn className="w-4 h-4" />
+            {loading ? 'Verificando...' : 'Ingresar'}
           </button>
         </form>
       </div>
 
       <p className="text-center text-xs text-gray-400 mt-6">
-        Sistema de gestion — Acceso restringido
+        Sistema de gestión — Acceso restringido
       </p>
     </div>
   );
@@ -97,8 +117,10 @@ function LoginForm() {
 
 export default function LoginPage() {
   return (
-    <Suspense fallback={<div className="text-center text-gray-400">Cargando...</div>}>
-      <LoginForm />
-    </Suspense>
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <Suspense fallback={<div className="text-center text-gray-400">Cargando...</div>}>
+        <LoginForm />
+      </Suspense>
+    </div>
   );
 }

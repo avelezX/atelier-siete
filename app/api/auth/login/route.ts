@@ -1,48 +1,46 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { createServerClient } from '@supabase/ssr';
+import { cookies } from 'next/headers';
 
-// Must match the same hash function used in middleware.ts
-function simpleHash(str: string): string {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32bit integer
-  }
-  return 'at7_' + Math.abs(hash).toString(36);
+function nitToEmail(nit: string): string {
+  const atelierNit = process.env.ATELIER_NIT || '901764924';
+  if (nit.trim() === atelierNit) return `admin@ateliersie7.co`;
+  return `${nit.trim()}@proveedores.ateliersie7.co`;
 }
 
 export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json();
-    const { password } = body;
+  const { nit, password } = await request.json();
 
-    if (!password) {
-      return NextResponse.json({ error: 'Clave requerida' }, { status: 400 });
-    }
-
-    const appPassword = process.env.APP_PASSWORD;
-    if (!appPassword) {
-      return NextResponse.json({ error: 'APP_PASSWORD no configurado en el servidor' }, { status: 500 });
-    }
-
-    if (password !== appPassword) {
-      return NextResponse.json({ error: 'Clave incorrecta' }, { status: 401 });
-    }
-
-    // Generate auth token and set cookie
-    const token = simpleHash(`atelier-${appPassword}`);
-    const response = NextResponse.json({ ok: true });
-
-    response.cookies.set('atelier-auth', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 60 * 60 * 24 * 30, // 30 days
-      path: '/',
-    });
-
-    return response;
-  } catch {
-    return NextResponse.json({ error: 'Error procesando la solicitud' }, { status: 500 });
+  if (!nit?.trim() || !password) {
+    return NextResponse.json({ error: 'Usuario y contraseña requeridos' }, { status: 400 });
   }
+
+  const email = nitToEmail(nit);
+  const cookieStore = await cookies();
+
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() { return cookieStore.getAll(); },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value, options }) =>
+            cookieStore.set(name, value, options)
+          );
+        },
+      },
+    }
+  );
+
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+
+  if (error || !data.user) {
+    return NextResponse.json({ error: 'Usuario o contraseña incorrectos' }, { status: 401 });
+  }
+
+  const role = data.user.app_metadata?.role || 'proveedor';
+  const redirect = role === 'admin' ? '/' : '/p/productos';
+
+  return NextResponse.json({ ok: true, role, redirect });
 }

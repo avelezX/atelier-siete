@@ -92,10 +92,17 @@ const menuSections: MenuSection[] = [
     ]
   },
   {
+    title: "Proveedores",
+    items: [
+      { name: "Panel", href: "/proveedores", icon: Building2 },
+      { name: "Proveedores Siigo", href: "/proveedores/siigo", icon: Truck },
+      { name: "Espacios", href: "/proveedores/espacios", icon: Package },
+    ]
+  },
+  {
     title: "Datos",
     items: [
       { name: "Sincronizacion", href: "/sync", icon: RefreshCw },
-      { name: "Proveedores", href: "/suppliers", icon: Truck },
     ]
   },
   {

@@ -1,54 +1,69 @@
+import { createServerClient } from '@supabase/ssr';
 import { NextRequest, NextResponse } from 'next/server';
 
-// Routes that don't require authentication
-const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/siigo/balance-prueba', '/api/dashboard/comparar-balance', '/api/dashboard/resumen-bp', '/api/siigo/test-endpoints', '/api/bp-notes', '/api/dashboard/account-suppliers', '/api/siigo/document-types'];
+const PUBLIC_PATHS = [
+  '/login',
+  '/api/auth/login',
+  '/api/auth/logout',
+];
 const STATIC_PREFIXES = ['/_next/', '/favicon.ico'];
 
-// Simple hash function compatible with Edge Runtime (no Node.js crypto)
-function simpleHash(str: string): string {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32bit integer
-  }
-  return 'at7_' + Math.abs(hash).toString(36);
-}
-
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Allow static assets and public paths
-  if (STATIC_PREFIXES.some((p) => pathname.startsWith(p))) {
-    return NextResponse.next();
-  }
-  if (PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + '/'))) {
+  // Allow static assets
+  if (STATIC_PREFIXES.some(p => pathname.startsWith(p))) {
     return NextResponse.next();
   }
 
-  // Check auth cookie
-  const cookie = request.cookies.get('atelier-auth');
-  const password = process.env.APP_PASSWORD;
+  // Rutas del portal proveedor (/p/) — sin sidebar, sesión propia de Supabase
+  // El mismo JWT de Supabase cubre todo; el rol se lee de app_metadata
+  // No necesitan tratamiento especial aquí salvo refrescar la sesión
 
-  if (!password) {
-    // No password configured — allow access (development without protection)
+  // Rutas públicas (login)
+  if (PUBLIC_PATHS.some(p => pathname === p)) {
     return NextResponse.next();
   }
 
-  const expectedToken = simpleHash(`atelier-${password}`);
+  // Refrescar sesión de Supabase y proteger rutas
+  let response = NextResponse.next({ request });
 
-  if (cookie?.value === expectedToken) {
-    return NextResponse.next();
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() { return request.cookies.getAll(); },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
+          response = NextResponse.next({ request });
+          cookiesToSet.forEach(({ name, value, options }) =>
+            response.cookies.set(name, value, options)
+          );
+        },
+      },
+    }
+  );
+
+  const { data: { user } } = await supabase.auth.getUser();
+
+  if (!user) {
+    if (pathname.startsWith('/api/')) {
+      return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
+    }
+    const loginUrl = new URL('/login', request.url);
+    loginUrl.searchParams.set('from', pathname);
+    return NextResponse.redirect(loginUrl);
   }
 
-  // Not authenticated — redirect to login (for pages) or return 401 (for APIs)
-  if (pathname.startsWith('/api/')) {
-    return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
+  const role = user.app_metadata?.role;
+
+  // Proveedor intentando acceder a rutas de admin
+  if (role === 'proveedor' && !pathname.startsWith('/p/') && !pathname.startsWith('/api/p/')) {
+    return NextResponse.redirect(new URL('/p/productos', request.url));
   }
 
-  const loginUrl = new URL('/login', request.url);
-  loginUrl.searchParams.set('from', pathname);
-  return NextResponse.redirect(loginUrl);
+  return response;
 }
 
 export const config = {

@@ -172,6 +172,7 @@ async function siigoPost<T>(path: string, body: unknown): Promise<T> {
     let errMsg: string;
     try {
       const errJson = await res.json();
+      console.log('[Siigo] POST error response:', JSON.stringify(errJson, null, 2));
       const msgs = errJson?.Errors?.map((e: any) => e.Message).join('; ');
       errMsg = msgs || JSON.stringify(errJson);
     } catch {
@@ -384,34 +385,84 @@ export async function createPurchase(data: SiigoCreatePurchaseRequest): Promise<
   return siigoPost<SiigoCreatePurchaseResponse>('/v1/purchases', data);
 }
 
-/**
- * Create or update a supplier contact in Siigo.
- * Used when a DIAN provider doesn't exist in Siigo yet.
- */
-export async function createSupplier(nit: string, name: string): Promise<any> {
-  const upperName = name.toUpperCase();
-  const isCompany = /S\.A\.|SAS|S\.A\.S|LTDA|LIMITADA|S\.C\.A|CIA\.|COMPAÑIA|CORPORACION|COOPERATIVA|FUNDACION|EMPRESA|INDUSTRIAS|COMERCIALIZADORA|DISTRIBUIDORA|INMOBILIARIA|INVERSIONES|PROMOTORA|CONSTRUCTORA|SEGUROS|BANCO|GRUPO|CENTRO|SERVICIOS/.test(upperName);
-  const cleanNit = nit.replace(/[^0-9]/g, '');
+const ID_TYPE_NAMES: Record<string, string> = {
+  '31': 'NIT',
+  '13': 'Cédula de ciudadanía',
+  '22': 'Cédula de extranjería',
+  '41': 'Pasaporte',
+  '12': 'Tarjeta de identidad',
+  '11': 'Registro civil',
+};
 
-  const nameParts = name.trim().split(/\s+/);
+export interface CreateSupplierInput {
+  nit: string;
+  nombre: string;
+  person_type: 'Company' | 'Person';
+  id_type_code: string; // '31'=NIT, '13'=Cédula, '22'=C.Extranjería, '41'=Pasaporte, '12'=T.Identidad, '11'=Reg.Civil
+  direccion?: string;
+  ciudad_code?: string;
+  ciudad_state?: string;
+  telefono?: string;
+  email?: string;
+  nombre_contacto?: string;
+}
+
+/**
+ * Crear proveedor en Siigo con todos los campos disponibles.
+ */
+export async function createSupplier(input: CreateSupplierInput): Promise<any> {
+  const cleanNit = input.nit.replace(/[^0-9]/g, '');
+  const isCompany = input.person_type === 'Company';
+
+  const nameParts = input.nombre.trim().split(/\s+/);
   const nameArray = isCompany
-    ? [name.trim()]
+    ? [input.nombre.trim()]
     : nameParts.length >= 2
       ? [nameParts[0], nameParts.slice(1).join(' ')]
-      : [name.trim(), ''];
+      : [input.nombre.trim(), ''];
 
-  const payload = {
-    type: 'Customer',
-    person_type: isCompany ? 'Company' : 'Person',
-    id_type: { code: isCompany ? '31' : '13' },
+  const payload: Record<string, unknown> = {
+    type: 'Supplier',
+    person_type: input.person_type,
+    id_type: input.id_type_code,
     identification: cleanNit,
     name: nameArray,
     active: true,
-    customer_settings: { is_customer: false },
-    supplier_settings: { is_supplier: true },
+    vat_responsible: false,
+    fiscal_responsibilities: [{ code: 'R-99-PN' }],
   };
 
-  return siigoPost<any>('/v1/customers', payload);
+  if (input.direccion || input.ciudad_code) {
+    payload.address = {
+      address: input.direccion || '',
+      ...(input.ciudad_code ? {
+        city: {
+          country_code: 'CO',
+          state_code: input.ciudad_state || input.ciudad_code.substring(0, 2),
+          city_code: input.ciudad_code,
+        }
+      } : {}),
+    };
+  }
+
+  if (input.telefono) {
+    payload.phones = [{ number: input.telefono.replace(/[^0-9]/g, '') }];
+  }
+
+  if (input.email || input.nombre_contacto) {
+    const contactName = input.nombre_contacto || input.nombre;
+    const parts = contactName.trim().split(/\s+/);
+    payload.contacts = [{
+      first_name: parts[0] || contactName,
+      last_name: parts.slice(1).join(' ') || '-',
+      email: input.email || '',
+    }];
+  }
+
+  console.log('[Siigo] createSupplier payload:', JSON.stringify(payload, null, 2));
+  const result = await siigoPost<any>('/v1/customers', payload);
+  console.log('[Siigo] createSupplier response:', JSON.stringify(result, null, 2));
+  return result;
 }
 
 /** Invalidate cached token */
